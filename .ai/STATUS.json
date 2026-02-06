@@ -10,10 +10,11 @@
     "T1.3",
     "T2.1",
     "T2.2",
-    "T3.1"
+    "T3.1",
+    "T3.2"
   ],
   "current": null,
-  "next": "T3.2",
+  "next": "T4.1",
   "blockers": [],
   "phases": {
     "0": { "name": "Safety Spine", "status": "DONE" },
@@ -30,5 +31,5 @@
     "11": { "name": "Self-Diagnosis & Recovery", "status": "PENDING" },
     "12": { "name": "Web Dashboard (Vite + React)", "status": "PENDING", "tasks": ["T12.1", "T12.2", "T12.3", "T12.4", "T12.5", "T12.6", "T12.7", "T12.8", "T12.9", "T12.10", "T12.11"], "spec": ".ai/FRONTEND_SPEC.md" }
   },
-  "notes": "Phase 3.1 complete. Added Phases 8-12 inspired by CodeFRAME (tiered memory, PRD templates, specialist agents, self-diagnosis, dashboard) while maintaining strict approval-gated safety model."
+  "notes": "Phase 3 complete. T3.2 (Workflow Runs + Proof Ledger) done - RunRecorder + context hashing implemented. Next: T4.1 (Policy Engine v1)."
 }

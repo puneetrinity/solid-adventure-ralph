@@ -247,7 +247,8 @@
 ---
 
 ### T3.2 Workflow Runs + Proof Ledger
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/audit/run-recorder.ts, packages/core/src/audit/context-hash.ts, prisma/schema.prisma WorkflowRun model -->
 
 **Goal:** Full auditability.
 
