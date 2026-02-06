@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.prisma
+
+# Ralph runtime files
+.ralph/logs/
+.ralph/live.log
+.ralph/.call_count
+.ralph/.circuit_breaker_*
+.ralph/.exit_signals
+.ralph/.last_reset
+.ralph/.loop_start_sha
+.ralph/.ralph_session
+.ralph/status.json

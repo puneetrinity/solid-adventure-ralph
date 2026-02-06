@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Workflow {
+  id        String   @id @default(uuid())
+  state     String
+  baseSha   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events       WorkflowEvent[]
+  artifacts    Artifact[]
+  approvals    Approval[]
+  patchSets    PatchSet[]
+  pullRequests PullRequest[]
+  runs         WorkflowRun[]
+}
+
+model WorkflowEvent {
+  id         String   @id @default(uuid())
+  workflowId String
+  type       String
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, createdAt])
+}
+
+model Artifact {
+  id         String   @id @default(uuid())
+  workflowId String
+  kind       String
+  path       String?
+  content    String
+  contentSha String
+  createdAt  DateTime @default(now())
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, kind, createdAt])
+}
+
+model Approval {
+  id         String   @id @default(uuid())
+  workflowId String
+  kind       String   // e.g. "apply_patches"
+  createdAt  DateTime @default(now())
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, kind])
+}
+
+model PatchSet {
+  id         String   @id @default(uuid())
+  workflowId String
+  title      String
+  baseSha    String
+  status     String   // proposed | approved | rejected | applied
+  createdAt  DateTime @default(now())
+  approvedAt DateTime?
+  approvedBy String?
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  patches    Patch[]
+
+  @@index([workflowId, createdAt])
+  @@index([workflowId, status])
+}
+
+model Patch {
+  id          String   @id @default(uuid())
+  patchSetId  String
+  taskId      String?
+  title       String
+  summary     String
+  diff        String
+  files       Json     // array of {path, additions, deletions}
+  addsTests   Boolean
+  riskLevel   String   // low | med | high
+  proposedCommands Json // array of strings
+  createdAt   DateTime @default(now())
+
+  patchSet    PatchSet @relation(fields: [patchSetId], references: [id], onDelete: Cascade)
+
+  @@index([patchSetId, createdAt])
+}
+
+model PullRequest {
+  id         String   @id @default(uuid())
+  workflowId String
+  number     Int
+  url        String
+  branch     String
+  status     String   // open|merged|closed
+  createdAt  DateTime @default(now())
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, createdAt])
+}
+
+model WorkflowRun {
+  id          String   @id @default(uuid())
+  workflowId  String
+  jobName     String   // e.g. "ingest_context", "apply_patches", "orchestrate"
+  status      String   // pending | running | completed | failed
+  inputHash   String   // SHA256 of canonical JSON inputs
+  inputs      Json     // raw input data for audit
+  outputs     Json?    // result data (nullable for pending/failed)
+  errorMsg    String?  // error message if failed
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+  durationMs  Int?     // computed: completedAt - startedAt
+
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, jobName, startedAt])
+  @@index([inputHash])
+}
