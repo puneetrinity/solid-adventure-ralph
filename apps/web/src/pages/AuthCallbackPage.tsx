@@ -26,13 +26,19 @@ export function AuthCallbackPage() {
 
     async function handleCallback() {
       try {
+        console.log('[DEBUG] Auth callback starting with code');
         const result = await api.auth.callback(code!);
+        console.log('[DEBUG] Auth callback result:', { ok: result.ok, hasToken: !!result.token, user: result.user?.username });
         if (result.token) {
           setAuthToken(result.token);
+          console.log('[DEBUG] Token saved to localStorage');
+        } else {
+          console.warn('[DEBUG] No token in callback response');
         }
         await checkAuth();
         navigate('/workflows', { replace: true });
       } catch (err) {
+        console.error('[DEBUG] Auth callback error:', err);
         setError(err instanceof Error ? err.message : 'Authentication failed');
       }
     }

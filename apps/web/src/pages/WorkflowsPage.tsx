@@ -55,10 +55,16 @@ export function WorkflowsPage() {
     if (!showCreateModal || reposLoading || availableRepos.length > 0) return;
     setReposLoading(true);
     setReposError(null);
+    const token = localStorage.getItem('auth_token');
+    console.log('[DEBUG] Loading repos, auth_token present:', !!token, token ? `(${token.substring(0, 20)}...)` : '');
     api.github
       .listRepos({ per_page: 100 })
-      .then(repos => setAvailableRepos(repos))
+      .then(repos => {
+        console.log('[DEBUG] Loaded repos:', repos.length);
+        setAvailableRepos(repos);
+      })
       .catch(err => {
+        console.error('[DEBUG] Failed to load repos:', err);
         const message = err instanceof Error ? err.message : 'Failed to load repositories';
         setReposError(message);
       })
