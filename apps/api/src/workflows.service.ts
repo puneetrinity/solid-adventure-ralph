@@ -29,7 +29,10 @@ export interface ListResult {
 export class WorkflowsService {
   private prisma = getPrisma();
 
-  constructor(@InjectQueue('workflow') private readonly workflowQueue: Queue) {}
+  constructor(
+    @InjectQueue('workflow') private readonly workflowQueue: Queue,
+    @InjectQueue('orchestrate') private readonly orchestrateQueue: Queue
+  ) {}
 
   async list(params: ListParams): Promise<ListResult> {
     const { limit, cursor, status } = params;
@@ -96,7 +99,7 @@ export class WorkflowsService {
     });
 
     // REFACTORED: Emit event to orchestrator instead of directly enqueueing ingest_context
-    await this.workflowQueue.add('orchestrate', {
+    await this.orchestrateQueue.add('orchestrate', {
       workflowId: workflow.id,
       event: { type: 'E_WORKFLOW_CREATED' }
     });
@@ -163,7 +166,7 @@ export class WorkflowsService {
 
     // REFACTORED: Emit event to orchestrator instead of directly enqueueing apply_patches
     // The orchestrator will decide whether to enqueue apply_patches based on state + context
-    await this.workflowQueue.add('orchestrate', {
+    await this.orchestrateQueue.add('orchestrate', {
       workflowId,
       event: { type: 'E_APPROVAL_RECORDED' }
     });
@@ -195,7 +198,7 @@ export class WorkflowsService {
     });
 
     // Emit event to orchestrator
-    await this.workflowQueue.add('orchestrate', {
+    await this.orchestrateQueue.add('orchestrate', {
       workflowId,
       event: { type: 'E_CHANGES_REQUESTED', comment }
     });
@@ -233,7 +236,7 @@ export class WorkflowsService {
     });
 
     // Emit event to orchestrator
-    await this.workflowQueue.add('orchestrate', {
+    await this.orchestrateQueue.add('orchestrate', {
       workflowId,
       event: { type: 'E_PATCH_SET_REJECTED', reason }
     });

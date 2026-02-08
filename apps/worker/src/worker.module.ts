@@ -104,7 +104,11 @@ function createGitHubClient(): GitHubClient {
     BullModule.forRoot({
       connection: parseRedisUrl(process.env.REDIS_URL || 'redis://localhost:6379')
     }),
-    BullModule.registerQueue({ name: 'workflow' })
+    BullModule.registerQueue({ name: 'workflow' }),
+    BullModule.registerQueue({ name: 'orchestrate' }),
+    BullModule.registerQueue({ name: 'ingest_context' }),
+    BullModule.registerQueue({ name: 'apply_patches' }),
+    BullModule.registerQueue({ name: 'evaluate_policy' })
   ],
   providers: [
     // Orchestrator (Phase 3)

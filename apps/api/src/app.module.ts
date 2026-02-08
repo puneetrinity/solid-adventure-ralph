@@ -13,7 +13,8 @@ import { LoggingMiddleware } from './logging.middleware';
     BullModule.forRoot({
       connection: parseRedisUrl(process.env.REDIS_URL || 'redis://localhost:6379')
     }),
-    BullModule.registerQueue({ name: 'workflow' })
+    BullModule.registerQueue({ name: 'workflow' }),
+    BullModule.registerQueue({ name: 'orchestrate' })
   ],
   controllers: [WorkflowsController, PatchesController, HealthController, AuthController],
   providers: [WorkflowsService]
