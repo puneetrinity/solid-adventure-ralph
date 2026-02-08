@@ -1,35 +1,64 @@
 import { Link } from 'react-router-dom';
-import { GitBranch, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { GitBranch, Clock, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { useWorkflows } from '../hooks/use-workflows';
+import { WorkflowStatusBadge } from '../components/workflow';
 
 export function DashboardPage() {
+  const { workflows, isLoading, error, refetch } = useWorkflows();
+
+  const stats = {
+    total: workflows.length,
+    pending: workflows.filter(w => w.state === 'WAITING_USER_APPROVAL').length,
+    inProgress: workflows.filter(w =>
+      ['INGESTED', 'PATCHES_PROPOSED', 'APPLYING_PATCHES'].includes(w.state)
+    ).length,
+    completed: workflows.filter(w => w.state === 'DONE' || w.state === 'PR_OPEN').length,
+  };
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <button
+          onClick={() => refetch()}
+          disabled={isLoading}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700 text-sm">
+          Failed to load data: {error.message}
+        </div>
+      )}
 
       {/* Stats cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={GitBranch}
           label="Total Workflows"
-          value="-"
+          value={isLoading ? '-' : stats.total}
           color="blue"
         />
         <StatCard
           icon={Clock}
           label="Pending Approval"
-          value="-"
+          value={isLoading ? '-' : stats.pending}
           color="yellow"
         />
         <StatCard
           icon={AlertCircle}
           label="In Progress"
-          value="-"
+          value={isLoading ? '-' : stats.inProgress}
           color="purple"
         />
         <StatCard
           icon={CheckCircle}
           label="Completed"
-          value="-"
+          value={isLoading ? '-' : stats.completed}
           color="green"
         />
       </div>
@@ -47,12 +76,34 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Recent workflows placeholder */}
+      {/* Recent workflows */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Workflows</h2>
-        <p className="text-gray-500 text-sm">
-          Workflow data will appear here once connected to the API.
-        </p>
+        {isLoading ? (
+          <p className="text-gray-500 text-sm">Loading...</p>
+        ) : workflows.length === 0 ? (
+          <p className="text-gray-500 text-sm">No workflows yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {workflows.slice(0, 5).map(workflow => (
+              <Link
+                key={workflow.id}
+                to={`/workflows/${workflow.id}`}
+                className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors"
+              >
+                <div>
+                  <p className="font-medium text-gray-900">
+                    {workflow.title || `${workflow.repoOwner}/${workflow.repoName}`}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {new Date(workflow.createdAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <WorkflowStatusBadge state={workflow.state} />
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
