@@ -22,17 +22,14 @@ export class ApplyPatchesProcessor extends WorkerHost {
   async process(job: Job<{ workflowId: string; patchSetId: string }>) {
     const { workflowId, patchSetId } = job.data;
 
-    // Get workflow with repo info
+    // Get workflow with repos
     const workflow = await this.prisma.workflow.findUnique({
-      where: { id: workflowId }
+      where: { id: workflowId },
+      include: { repos: true }
     });
 
     if (!workflow) {
       throw new Error(`Workflow ${workflowId} not found`);
-    }
-
-    if (!workflow.repoOwner || !workflow.repoName) {
-      throw new Error(`Workflow ${workflowId} missing repository configuration`);
     }
 
     // Validate patchSet belongs to this workflow
@@ -48,7 +45,21 @@ export class ApplyPatchesProcessor extends WorkerHost {
       throw new Error(`PatchSet ${patchSetId} does not belong to workflow ${workflowId}`);
     }
 
-    this.logger.log(`Applying patches for ${workflow.repoOwner}/${workflow.repoName}`);
+    // Get repo info from patchSet, workflow.repos, or legacy fields
+    const repoOwner = patchSet.repoOwner ||
+      workflow.repos?.find(r => r.role === 'primary')?.owner ||
+      workflow.repoOwner;
+    const repoName = patchSet.repoName ||
+      workflow.repos?.find(r => r.role === 'primary')?.repo ||
+      workflow.repoName;
+    const baseBranch = workflow.repos?.find(r => r.role === 'primary')?.baseBranch ||
+      workflow.baseBranch;
+
+    if (!repoOwner || !repoName) {
+      throw new Error(`Workflow ${workflowId} missing repository configuration`);
+    }
+
+    this.logger.log(`Applying patches for ${repoOwner}/${repoName}`);
 
     // Record run start
     const runId = await this.runRecorder.startRun({
@@ -69,9 +80,9 @@ export class ApplyPatchesProcessor extends WorkerHost {
       const result = await patchApplicator.applyPatches({
         workflowId,
         patchSetId,
-        owner: workflow.repoOwner,
-        repo: workflow.repoName,
-        baseBranch: workflow.baseBranch
+        owner: repoOwner,
+        repo: repoName,
+        baseBranch
       });
 
       if (!result.success) {

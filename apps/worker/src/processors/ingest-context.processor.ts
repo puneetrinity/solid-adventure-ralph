@@ -28,34 +28,41 @@ export class IngestContextProcessor extends WorkerHost {
   async process(job: Job<{ workflowId: string }>) {
     const { workflowId } = job.data;
 
-    // Get workflow with repo info
+    // Get workflow with repos
     const workflow = await this.prisma.workflow.findUnique({
-      where: { id: workflowId }
+      where: { id: workflowId },
+      include: { repos: true }
     });
 
     if (!workflow) {
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
-    if (!workflow.repoOwner || !workflow.repoName) {
+    // Get primary repo (from repos table or legacy fields)
+    const primaryRepo = workflow.repos?.find(r => r.role === 'primary') || workflow.repos?.[0];
+    const repoOwner = primaryRepo?.owner || workflow.repoOwner;
+    const repoName = primaryRepo?.repo || workflow.repoName;
+    const baseBranch = primaryRepo?.baseBranch || workflow.baseBranch;
+
+    if (!repoOwner || !repoName) {
       throw new Error(`Workflow ${workflowId} missing repository configuration`);
     }
 
-    this.logger.log(`Ingesting context for ${workflow.repoOwner}/${workflow.repoName}`);
+    this.logger.log(`Ingesting context for ${repoOwner}/${repoName}`);
 
     // Record run start
     const runId = await this.runRecorder.startRun({
       workflowId,
       jobName: 'ingest_context',
-      inputs: { workflowId, repoOwner: workflow.repoOwner, repoName: workflow.repoName }
+      inputs: { workflowId, repoOwner, repoName, goal: workflow.goal }
     });
 
     try {
       // Get base branch SHA from GitHub
       const branch = await this.github.getBranch({
-        owner: workflow.repoOwner,
-        repo: workflow.repoName,
-        branch: workflow.baseBranch
+        owner: repoOwner,
+        repo: repoName,
+        branch: baseBranch
       });
 
       const baseSha = branch.sha;
@@ -66,12 +73,13 @@ export class IngestContextProcessor extends WorkerHost {
         data: { baseSha }
       });
 
-      // Fetch README.md from the repo
+      // Fetch README.md and package.json from the repo
       let readmeContent = '';
+      let packageJson = '';
       try {
         const readme = await this.github.getFileContents({
-          owner: workflow.repoOwner,
-          repo: workflow.repoName,
+          owner: repoOwner,
+          repo: repoName,
           path: 'README.md',
           ref: baseSha
         });
@@ -81,36 +89,83 @@ export class IngestContextProcessor extends WorkerHost {
         this.logger.warn('No README.md found in repository');
       }
 
+      try {
+        const pkg = await this.github.getFileContents({
+          owner: repoOwner,
+          repo: repoName,
+          path: 'package.json',
+          ref: baseSha
+        });
+        packageJson = pkg.content;
+        this.logger.log(`Fetched package.json (${pkg.size} bytes)`);
+      } catch {
+        // package.json is optional
+      }
+
       await this.prisma.workflowEvent.create({
         data: {
           workflowId,
           type: 'worker.ingest_context.completed',
-          payload: { baseSha, repoOwner: workflow.repoOwner, repoName: workflow.repoName }
+          payload: { baseSha, repoOwner, repoName }
         }
       });
 
       // Generate patch using Groq LLM
       const groqProvider = createGroqProvider();
-      let patchTitle = 'Update README';
-      let patchSummary = 'Improve README documentation';
+      let patchTitle = workflow.goal?.substring(0, 50) || 'Code change';
+      let patchSummary = workflow.goal || 'Implement requested changes';
       let patchDiff = '';
 
       if (groqProvider) {
         this.logger.log('Using Groq LLM to generate patch...');
         const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
 
-        const prompt = `You are a helpful coding assistant. Given this README.md content:
+        // Build prompt with goal, context, feedback, and repo files
+        const promptParts = [
+          `You are an expert software engineer. Your task is to implement the following request.`,
+          ``,
+          `## Goal`,
+          workflow.goal || 'Improve the codebase',
+          ``
+        ];
 
-\`\`\`markdown
-${readmeContent || '# Project\n\nNo README content yet.'}
-\`\`\`
+        if (workflow.context) {
+          promptParts.push(`## Context`, workflow.context, ``);
+        }
 
-Generate a small improvement to this README. Respond with ONLY a JSON object in this exact format (no markdown code blocks, no explanation):
-{
-  "title": "Short title for the change",
-  "summary": "Brief description of what this change does",
-  "newContent": "The complete new README.md content"
-}`;
+        if (workflow.feedback) {
+          promptParts.push(`## Previous Feedback (address these issues)`, workflow.feedback, ``);
+        }
+
+        promptParts.push(
+          `## Repository: ${repoOwner}/${repoName}`,
+          ``,
+          `## Current Files`,
+          ``
+        );
+
+        if (readmeContent) {
+          promptParts.push(`### README.md`, '```markdown', readmeContent, '```', ``);
+        }
+
+        if (packageJson) {
+          promptParts.push(`### package.json`, '```json', packageJson, '```', ``);
+        }
+
+        promptParts.push(
+          `## Instructions`,
+          `Based on the goal and context, generate a patch that implements the requested changes.`,
+          `Focus on the README.md file for now.`,
+          ``,
+          `Respond with ONLY a JSON object in this exact format (no markdown code blocks, no explanation):`,
+          `{`,
+          `  "title": "Short title for the change (max 50 chars)",`,
+          `  "summary": "Brief description of what this change does",`,
+          `  "newContent": "The complete new README.md content"`,
+          `}`
+        );
+
+        const prompt = promptParts.join('\n');
 
         const response = await llmRunner.run('coder', prompt, {
           context: { workflowId }
@@ -163,7 +218,13 @@ Generate a small improvement to this README. Respond with ONLY a JSON object in 
       const decisionContent = [
         '# Decision',
         '',
-        `- Repository: ${workflow.repoOwner}/${workflow.repoName}`,
+        `## Goal`,
+        workflow.goal || 'No goal specified',
+        '',
+        workflow.context ? `## Context\n${workflow.context}\n` : '',
+        workflow.feedback ? `## Feedback\n${workflow.feedback}\n` : '',
+        `## Repository`,
+        `- Repo: ${repoOwner}/${repoName}`,
         `- Base SHA: ${baseSha}`,
         `- Recommendation: PROCEED`,
         `- Generated patch: ${patchTitle}`,
@@ -181,13 +242,15 @@ Generate a small improvement to this README. Respond with ONLY a JSON object in 
         }
       });
 
-      // Create PatchSet + Patch
+      // Create PatchSet + Patch with repo info
       const patchSet = await this.prisma.patchSet.create({
         data: {
           workflowId,
           title: patchTitle,
           baseSha,
-          status: 'proposed'
+          status: 'proposed',
+          repoOwner,
+          repoName
         }
       });
 
@@ -201,7 +264,9 @@ Generate a small improvement to this README. Respond with ONLY a JSON object in 
           files: [{ path: 'README.md', additions: 2, deletions: 0 }],
           addsTests: false,
           riskLevel: 'low',
-          proposedCommands: []
+          proposedCommands: [],
+          repoOwner,
+          repoName
         }
       });
 
