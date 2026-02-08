@@ -1,5 +1,8 @@
-# Worker Dockerfile
+# Worker Dockerfile - cache bust v2
 FROM node:20-alpine
+
+# Install bash (required by npm scripts on Alpine)
+RUN apk add --no-cache bash
 
 WORKDIR /app
 
