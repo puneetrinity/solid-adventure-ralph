@@ -1,8 +1,8 @@
 # Worker Dockerfile
 FROM node:20-alpine
 
-# Install bash (required by npm scripts on Alpine) - bust cache 20260208
-RUN apk add --no-cache bash && echo "cache-bust-20260208"
+# Install bash + OpenSSL 1.1 compatibility (Prisma on Alpine) - bust cache 20260208v2
+RUN apk add --no-cache bash openssl1.1-compat && echo "cache-bust-20260208v2"
 
 WORKDIR /app
 
