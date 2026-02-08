@@ -13,17 +13,19 @@ import {
   CheckCircle,
   XCircle,
   MessageSquare,
+  ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react';
 import { useWorkflow } from '../hooks/use-workflow';
 import { WorkflowStatusBadge } from '../components/workflow';
 import { Toast, useToast, Modal } from '../components/ui';
 import { api } from '../api/client';
-import type { Workflow, WorkflowEvent, Artifact, PatchSet, Patch } from '../types';
+import type { Workflow, WorkflowEvent, Artifact, PatchSet, Patch, PolicyViolation } from '../types';
 
 export function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { workflow, isLoading, error, refetch, isPolling, lastUpdated } = useWorkflow(id!);
-  const [activeTab, setActiveTab] = useState<'overview' | 'timeline' | 'artifacts' | 'patches'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'timeline' | 'artifacts' | 'policy' | 'patches'>('overview');
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
   const [isRequestingChanges, setIsRequestingChanges] = useState(false);
@@ -401,19 +403,30 @@ export function WorkflowDetailPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-4">
-          {(['overview', 'timeline', 'artifacts', 'patches'] as const).map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`py-2 px-1 text-sm font-medium border-b-2 -mb-px ${
-                activeTab === tab
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
+          {(['overview', 'timeline', 'artifacts', 'policy', 'patches'] as const).map(tab => {
+            const hasViolations = tab === 'policy' && (workflow.policyViolations?.length ?? 0) > 0;
+            const hasBlockingViolations = tab === 'policy' && workflow.policyViolations?.some(v => v.severity === 'BLOCK');
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`py-2 px-1 text-sm font-medium border-b-2 -mb-px flex items-center gap-1 ${
+                  activeTab === tab
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {hasViolations && (
+                  <span className={`ml-1 px-1.5 py-0.5 text-xs rounded-full ${
+                    hasBlockingViolations ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                  }`}>
+                    {workflow.policyViolations?.length}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
       </div>
 
@@ -422,6 +435,7 @@ export function WorkflowDetailPage() {
         {activeTab === 'overview' && <OverviewTab workflow={workflow} />}
         {activeTab === 'timeline' && <TimelineTab events={workflow.events || []} />}
         {activeTab === 'artifacts' && <ArtifactsTab artifacts={workflow.artifacts || []} />}
+        {activeTab === 'policy' && <PolicyTab violations={workflow.policyViolations || []} />}
         {activeTab === 'patches' && <PatchSetsTab patchSets={workflow.patchSets || []} />}
       </div>
     </div>
@@ -606,6 +620,126 @@ function ArtifactsTab({ artifacts }: { artifacts: Artifact[] }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function PolicyTab({ violations }: { violations: PolicyViolation[] }) {
+  if (violations.length === 0) {
+    return (
+      <div className="bg-green-50 border border-green-200 rounded-lg p-6">
+        <div className="flex items-center gap-3">
+          <ShieldCheck className="h-6 w-6 text-green-500" />
+          <div>
+            <h3 className="text-sm font-medium text-green-800">No Policy Violations</h3>
+            <p className="text-sm text-green-700 mt-1">
+              All proposed patches passed policy evaluation.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const blockingViolations = violations.filter(v => v.severity === 'BLOCK');
+  const warnings = violations.filter(v => v.severity === 'WARN');
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className={`rounded-lg p-4 ${
+        blockingViolations.length > 0
+          ? 'bg-red-50 border border-red-200'
+          : 'bg-yellow-50 border border-yellow-200'
+      }`}>
+        <div className="flex items-center gap-3">
+          <ShieldAlert className={`h-6 w-6 ${
+            blockingViolations.length > 0 ? 'text-red-500' : 'text-yellow-500'
+          }`} />
+          <div>
+            <h3 className={`text-sm font-medium ${
+              blockingViolations.length > 0 ? 'text-red-800' : 'text-yellow-800'
+            }`}>
+              {blockingViolations.length > 0
+                ? `${blockingViolations.length} Blocking Violation${blockingViolations.length > 1 ? 's' : ''}`
+                : `${warnings.length} Warning${warnings.length > 1 ? 's' : ''}`}
+            </h3>
+            <p className={`text-sm mt-1 ${
+              blockingViolations.length > 0 ? 'text-red-700' : 'text-yellow-700'
+            }`}>
+              {blockingViolations.length > 0
+                ? 'These violations must be resolved before the patch can be applied.'
+                : 'Review these warnings before approving.'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Blocking violations */}
+      {blockingViolations.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200">
+          <div className="px-4 py-3 border-b border-gray-200">
+            <h4 className="text-sm font-medium text-red-700 flex items-center gap-2">
+              <XCircle className="h-4 w-4" />
+              Blocking Violations
+            </h4>
+          </div>
+          <ul className="divide-y divide-gray-100">
+            {blockingViolations.map(violation => (
+              <li key={violation.id} className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">{violation.message}</p>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                      <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{violation.rule}</span>
+                      {violation.file && <span className="font-mono">{violation.file}</span>}
+                      {violation.line && <span>Line {violation.line}</span>}
+                    </div>
+                    {violation.evidence && (
+                      <pre className="mt-2 text-xs bg-gray-50 p-2 rounded overflow-x-auto">
+                        {violation.evidence}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Warnings */}
+      {warnings.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200">
+          <div className="px-4 py-3 border-b border-gray-200">
+            <h4 className="text-sm font-medium text-yellow-700 flex items-center gap-2">
+              <AlertCircle className="h-4 w-4" />
+              Warnings
+            </h4>
+          </div>
+          <ul className="divide-y divide-gray-100">
+            {warnings.map(violation => (
+              <li key={violation.id} className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">{violation.message}</p>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                      <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{violation.rule}</span>
+                      {violation.file && <span className="font-mono">{violation.file}</span>}
+                      {violation.line && <span>Line {violation.line}</span>}
+                    </div>
+                    {violation.evidence && (
+                      <pre className="mt-2 text-xs bg-gray-50 p-2 rounded overflow-x-auto">
+                        {violation.evidence}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

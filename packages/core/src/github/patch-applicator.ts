@@ -250,8 +250,28 @@ export class PatchApplicator {
 
         for (const change of fileChanges) {
           if (change.isDeleted) {
-            // For deleted files, we'd need a deleteFile operation
-            // For now, skip deletions (can be added later)
+            // Delete file - get current SHA first
+            try {
+              const currentFile = await this.writeGate.getFileContents(
+                owner,
+                repo,
+                change.path,
+                branchName
+              );
+              const result = await this.writeGate.deleteFile(workflowId, {
+                owner,
+                repo,
+                path: change.path,
+                message: `Delete ${change.path}\n\n${patch.title}`,
+                sha: currentFile.sha,
+                branch: branchName
+              });
+              if (result.commitSha && !commitShas.includes(result.commitSha)) {
+                commitShas.push(result.commitSha);
+              }
+            } catch (err) {
+              // File might not exist, skip
+            }
             continue;
           }
 

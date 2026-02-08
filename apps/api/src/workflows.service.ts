@@ -125,7 +125,8 @@ export class WorkflowsService {
           include: { patches: { orderBy: { createdAt: 'asc' } } }
         },
         approvals: { orderBy: { createdAt: 'asc' } },
-        pullRequests: { orderBy: { createdAt: 'desc' } }
+        pullRequests: { orderBy: { createdAt: 'desc' } },
+        policyViolations: { orderBy: { createdAt: 'asc' } }
       }
     });
 

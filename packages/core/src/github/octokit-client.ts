@@ -20,6 +20,8 @@ import type {
   CreateBranchResult,
   UpdateFileParams,
   UpdateFileResult,
+  DeleteFileParams,
+  DeleteFileResult,
   OpenPullRequestParams,
   OpenPullRequestResult
 } from './github-client';
@@ -166,6 +168,21 @@ export class OctokitGitHubClient implements GitHubClient {
     return {
       path: data.content?.path ?? params.path,
       sha: data.content?.sha ?? '',
+      commitSha: data.commit.sha ?? ''
+    };
+  }
+
+  async deleteFile(params: DeleteFileParams): Promise<DeleteFileResult> {
+    const { data } = await this.octokit.repos.deleteFile({
+      owner: params.owner,
+      repo: params.repo,
+      path: params.path,
+      message: params.message,
+      sha: params.sha,
+      branch: params.branch
+    });
+
+    return {
       commitSha: data.commit.sha ?? ''
     };
   }

@@ -44,17 +44,15 @@ export class EvaluatePolicyProcessor extends WorkerHost {
         throw new Error(`PatchSet ${patchSetId} does not belong to workflow ${workflowId}`);
       }
 
-      // Phase 4: Simple policy evaluation
-      // For now, check basic rules:
-      // 1. No patches that modify sensitive files (.env, secrets, credentials)
-      // 2. No patches with high risk level
-      const violations: { rule: string; message: string; blocking: boolean; file: string }[] = [];
+      // Policy evaluation rules
+      const violations: { rule: string; message: string; blocking: boolean; file: string; evidence?: string }[] = [];
 
       for (const patch of patchSet.patches) {
         const files = patch.files as { path: string }[];
+        const diff = patch.diff as string || '';
 
-        // Check for sensitive file modifications
         for (const file of files) {
+          // Rule 1: Sensitive files (blocking)
           if (this.isSensitiveFile(file.path)) {
             violations.push({
               rule: 'NO_SENSITIVE_FILES',
@@ -63,15 +61,58 @@ export class EvaluatePolicyProcessor extends WorkerHost {
               file: file.path
             });
           }
+
+          // Rule 2: Frozen files (blocking)
+          if (this.isFrozenFile(file.path)) {
+            violations.push({
+              rule: 'FROZEN_FILE',
+              message: `File is frozen and should not be modified: ${file.path}`,
+              blocking: true,
+              file: file.path
+            });
+          }
+
+          // Rule 3: Deny-glob patterns (blocking)
+          const denyMatch = this.matchesDenyGlob(file.path);
+          if (denyMatch) {
+            violations.push({
+              rule: 'DENY_GLOB',
+              message: `File matches denied pattern "${denyMatch}": ${file.path}`,
+              blocking: true,
+              file: file.path
+            });
+          }
         }
 
-        // Check risk level
+        // Rule 4: Secret scanning in diff content (blocking)
+        const secrets = this.scanForSecrets(diff);
+        for (const secret of secrets) {
+          violations.push({
+            rule: 'SECRET_DETECTED',
+            message: `Potential ${secret.type} detected in patch`,
+            blocking: true,
+            file: patch.title || 'unknown',
+            evidence: secret.match.substring(0, 50) + (secret.match.length > 50 ? '...' : '')
+          });
+        }
+
+        // Rule 5: High risk level (warning)
         if (patch.riskLevel === 'high') {
           violations.push({
             rule: 'HIGH_RISK_WARNING',
             message: `Patch "${patch.title}" has high risk level`,
-            blocking: false, // warning only
+            blocking: false,
             file: `patch:${patch.title}`
+          });
+        }
+
+        // Rule 6: Large diff warning
+        if (diff.length > 10000) {
+          violations.push({
+            rule: 'LARGE_DIFF_WARNING',
+            message: `Patch has a large diff (${Math.round(diff.length / 1000)}KB) - review carefully`,
+            blocking: false,
+            file: patch.title || 'unknown'
           });
         }
       }
@@ -99,7 +140,7 @@ export class EvaluatePolicyProcessor extends WorkerHost {
             file: v.file,
             message: v.message,
             line: null,
-            evidence: null
+            evidence: v.evidence || null
           }))
         });
       }
@@ -178,5 +219,109 @@ export class EvaluatePolicyProcessor extends WorkerHost {
     ];
 
     return sensitivePatterns.some(pattern => pattern.test(path));
+  }
+
+  private isFrozenFile(path: string): boolean {
+    const frozenFiles = [
+      'LICENSE',
+      'LICENSE.md',
+      'LICENSE.txt',
+      'LICENCE',
+      'package-lock.json',
+      'yarn.lock',
+      'pnpm-lock.yaml',
+      'Cargo.lock',
+      'poetry.lock',
+      'Gemfile.lock',
+      'composer.lock',
+      '.gitignore',
+      '.gitattributes',
+    ];
+
+    const fileName = path.split('/').pop() || '';
+    return frozenFiles.includes(fileName);
+  }
+
+  private matchesDenyGlob(path: string): string | null {
+    // Patterns that should never be modified by automated tools
+    const denyPatterns = [
+      { pattern: /^\.github\/workflows\//, name: '.github/workflows/*' },
+      { pattern: /^\.github\/CODEOWNERS$/, name: 'CODEOWNERS' },
+      { pattern: /dockerfile/i, name: 'Dockerfile' },
+      { pattern: /docker-compose/i, name: 'docker-compose' },
+      { pattern: /^\.dockerignore$/, name: '.dockerignore' },
+      { pattern: /^Makefile$/, name: 'Makefile' },
+      { pattern: /^\.gitlab-ci\.yml$/, name: '.gitlab-ci.yml' },
+      { pattern: /^\.travis\.yml$/, name: '.travis.yml' },
+      { pattern: /^Jenkinsfile$/, name: 'Jenkinsfile' },
+    ];
+
+    for (const { pattern, name } of denyPatterns) {
+      if (pattern.test(path)) {
+        return name;
+      }
+    }
+    return null;
+  }
+
+  private scanForSecrets(content: string): { type: string; match: string }[] {
+    const secrets: { type: string; match: string }[] = [];
+
+    const secretPatterns = [
+      // API Keys
+      { type: 'AWS Access Key', pattern: /AKIA[0-9A-Z]{16}/g },
+      { type: 'AWS Secret Key', pattern: /[A-Za-z0-9/+=]{40}(?=\s|$|"|')/g },
+      { type: 'GitHub Token', pattern: /gh[pousr]_[A-Za-z0-9_]{36,}/g },
+      { type: 'Slack Token', pattern: /xox[baprs]-[0-9a-zA-Z-]+/g },
+      { type: 'Stripe Key', pattern: /sk_live_[0-9a-zA-Z]{24,}/g },
+      { type: 'Stripe Key', pattern: /pk_live_[0-9a-zA-Z]{24,}/g },
+
+      // Generic patterns
+      { type: 'Private Key', pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g },
+      { type: 'API Key', pattern: /api[_-]?key['":\s]*[=:]\s*['"]?[A-Za-z0-9_-]{20,}['"]?/gi },
+      { type: 'Secret', pattern: /secret['":\s]*[=:]\s*['"]?[A-Za-z0-9_-]{20,}['"]?/gi },
+      { type: 'Password', pattern: /password['":\s]*[=:]\s*['"]?[^\s'"]{8,}['"]?/gi },
+      { type: 'Bearer Token', pattern: /bearer\s+[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gi },
+
+      // Database URLs with passwords
+      { type: 'Database URL', pattern: /(postgres|mysql|mongodb):\/\/[^:]+:[^@]+@/gi },
+    ];
+
+    // Only scan added lines (lines starting with +)
+    const addedLines = content.split('\n')
+      .filter(line => line.startsWith('+') && !line.startsWith('+++'))
+      .join('\n');
+
+    for (const { type, pattern } of secretPatterns) {
+      const matches = addedLines.match(pattern);
+      if (matches) {
+        for (const match of matches) {
+          // Avoid false positives for common placeholders
+          if (!this.isPlaceholder(match)) {
+            secrets.push({ type, match });
+          }
+        }
+      }
+    }
+
+    return secrets;
+  }
+
+  private isPlaceholder(value: string): boolean {
+    const placeholders = [
+      /^your[_-]?/i,
+      /^my[_-]?/i,
+      /^xxx+$/i,
+      /^placeholder$/i,
+      /^example$/i,
+      /^test$/i,
+      /^fake$/i,
+      /^dummy$/i,
+      /^<[^>]+>$/,
+      /^\$\{[^}]+\}$/,
+      /^\{\{[^}]+\}\}$/,
+    ];
+
+    return placeholders.some(p => p.test(value));
   }
 }

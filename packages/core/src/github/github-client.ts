@@ -115,6 +115,19 @@ export type UpdateFileResult = {
   commitSha: string;
 };
 
+export type DeleteFileParams = {
+  owner: string;
+  repo: string;
+  path: string;
+  message: string;
+  sha: string; // required - must know current file SHA
+  branch: string;
+};
+
+export type DeleteFileResult = {
+  commitSha: string;
+};
+
 // ============================================================================
 // GitHub Client Interface
 // ============================================================================
@@ -132,6 +145,7 @@ export interface GitHubClient {
   // Write operations (require approval via WriteGate)
   createBranch(params: CreateBranchParams): Promise<CreateBranchResult>;
   updateFile(params: UpdateFileParams): Promise<UpdateFileResult>;
+  deleteFile(params: DeleteFileParams): Promise<DeleteFileResult>;
   openPullRequest(params: OpenPullRequestParams): Promise<OpenPullRequestResult>;
 }
 
@@ -204,6 +218,13 @@ export class StubGitHubClient implements GitHubClient {
     };
     this.createdFiles.set(params.path, result);
     return result;
+  }
+
+  async deleteFile(params: DeleteFileParams): Promise<DeleteFileResult> {
+    this.createdFiles.delete(params.path);
+    return {
+      commitSha: `stub-delete-commit-sha-${Date.now()}`
+    };
   }
 
   async openPullRequest(params: OpenPullRequestParams): Promise<OpenPullRequestResult> {

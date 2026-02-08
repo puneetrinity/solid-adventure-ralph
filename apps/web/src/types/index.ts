@@ -37,6 +37,7 @@ export interface Workflow {
   events?: WorkflowEvent[];
   pullRequests?: PullRequest[];
   approvals?: { id: string; kind: string; createdAt: string }[];
+  policyViolations?: PolicyViolation[];
 }
 
 export interface PatchSet {
@@ -79,11 +80,16 @@ export interface WorkflowEvent {
 }
 
 export interface PolicyViolation {
+  id: string;
+  workflowId: string;
+  patchSetId: string;
   rule: string;
-  severity: 'warn' | 'block';
+  severity: 'WARN' | 'BLOCK';
+  file: string;
   message: string;
-  filePath?: string;
   line?: number;
+  evidence?: string;
+  createdAt: string;
 }
 
 export interface ApiError {

@@ -106,6 +106,16 @@ export function transition(
       // Non-blocking evaluation doesn't change state
       return result('WAITING_USER_APPROVAL', [], 'Policy evaluated with warnings only');
     }
+
+    // User requested changes - go back to PATCHES_PROPOSED to regenerate
+    if (event.type === 'E_CHANGES_REQUESTED') {
+      return result('NEEDS_HUMAN', [], `Changes requested: ${event.comment || 'No comment provided'}`);
+    }
+
+    // User rejected the patch set
+    if (event.type === 'E_PATCH_SET_REJECTED') {
+      return result('FAILED', [], `Patch set rejected: ${event.reason || 'No reason provided'}`);
+    }
   }
 
   // APPLYING_PATCHES state transitions
@@ -127,9 +137,18 @@ export function transition(
 
   // PR_OPEN state transitions (Phase 6)
   if (current === 'PR_OPEN') {
+    if (event.type === 'E_PR_MERGED') {
+      return result('DONE', [], `PR #${event.prNumber} merged, workflow complete`);
+    }
+
+    if (event.type === 'E_PR_CLOSED') {
+      return result('NEEDS_HUMAN', [], `PR #${event.prNumber} closed without merging`);
+    }
+
     if (event.type === 'E_CI_COMPLETED') {
       if (event.result.conclusion === 'success') {
-        return result('DONE', [], 'CI passed, workflow complete');
+        // CI passed but PR not merged yet - stay in PR_OPEN
+        return result('PR_OPEN', [], 'CI passed, awaiting PR merge');
       }
       return result('NEEDS_HUMAN', [], `CI ${event.result.conclusion}, needs human review`);
     }

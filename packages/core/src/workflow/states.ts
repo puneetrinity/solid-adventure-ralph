@@ -18,7 +18,11 @@ export type WorkflowEventType =
   | 'E_JOB_FAILED'
   | 'E_APPROVAL_RECORDED'
   | 'E_POLICY_EVALUATED'
-  | 'E_CI_COMPLETED';
+  | 'E_CI_COMPLETED'
+  | 'E_PR_MERGED'
+  | 'E_PR_CLOSED'
+  | 'E_CHANGES_REQUESTED'
+  | 'E_PATCH_SET_REJECTED';
 
 export type TransitionEvent =
   | { type: 'E_WORKFLOW_CREATED' }
@@ -26,7 +30,11 @@ export type TransitionEvent =
   | { type: 'E_JOB_COMPLETED'; stage: StageName; result?: any }
   | { type: 'E_JOB_FAILED'; stage: StageName; error: string }
   | { type: 'E_POLICY_EVALUATED'; result: { hasBlockingViolations: boolean; violationIds?: string[] } }
-  | { type: 'E_CI_COMPLETED'; result: { conclusion: 'success' | 'failure' | 'cancelled' } };
+  | { type: 'E_CI_COMPLETED'; result: { conclusion: 'success' | 'failure' | 'cancelled' } }
+  | { type: 'E_PR_MERGED'; prNumber: number }
+  | { type: 'E_PR_CLOSED'; prNumber: number }
+  | { type: 'E_CHANGES_REQUESTED'; comment?: string }
+  | { type: 'E_PATCH_SET_REJECTED'; reason?: string };
 
 export type EnqueueJob =
   | { queue: 'workflow'; name: 'ingest_context'; payload: { workflowId: string } }

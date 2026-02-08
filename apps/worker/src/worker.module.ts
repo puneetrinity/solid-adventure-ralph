@@ -81,6 +81,20 @@ class TokenGitHubClient implements GitHubClient {
     };
   }
 
+  async deleteFile(params: { owner: string; repo: string; path: string; message: string; sha: string; branch: string }) {
+    const { data } = await this.octokit.repos.deleteFile({
+      owner: params.owner,
+      repo: params.repo,
+      path: params.path,
+      message: params.message,
+      sha: params.sha,
+      branch: params.branch
+    });
+    return {
+      commitSha: data.commit.sha ?? ''
+    };
+  }
+
   async openPullRequest(params: { owner: string; repo: string; head: string; base: string; title: string; body?: string }) {
     const { data } = await this.octokit.pulls.create(params);
     return { url: data.html_url, number: data.number };

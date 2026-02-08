@@ -6,7 +6,9 @@ import type {
   CreateBranchParams,
   CreateBranchResult,
   UpdateFileParams,
-  UpdateFileResult
+  UpdateFileResult,
+  DeleteFileParams,
+  DeleteFileResult
 } from '../github/github-client';
 
 /**
@@ -82,6 +84,14 @@ export class WriteGate {
   async updateFile(workflowId: string, params: UpdateFileParams): Promise<UpdateFileResult> {
     await this.assertApproved(workflowId, 'apply_patches');
     return this.github.updateFile(params);
+  }
+
+  /**
+   * Delete a file (requires approval).
+   */
+  async deleteFile(workflowId: string, params: DeleteFileParams): Promise<DeleteFileResult> {
+    await this.assertApproved(workflowId, 'apply_patches');
+    return this.github.deleteFile(params);
   }
 
   /**
