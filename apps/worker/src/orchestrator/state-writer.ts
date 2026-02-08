@@ -1,6 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import type { WorkflowState } from '@arch-orchestrator/core/workflow/states';
-import type { TransitionResult } from '@arch-orchestrator/core/workflow/transition';
+import type { WorkflowState, TransitionResult } from '@arch-orchestrator/core';
 
 /**
  * Persists the transition result: updates workflow state and records event.

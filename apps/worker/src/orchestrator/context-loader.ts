@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import type { TransitionContext } from '@arch-orchestrator/core/workflow/transition';
+import type { TransitionContext } from '@arch-orchestrator/core';
 
 /**
  * Loads all data needed to make a transition decision.

@@ -3,8 +3,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Job, Queue } from 'bullmq';
 import { getPrisma } from '@arch-orchestrator/db';
-import { WriteGate, type GitHubClient } from '@arch-orchestrator/core';
-import { RunRecorder } from '@arch-orchestrator/core/audit/run-recorder';
+import { WriteGate, RunRecorder, type GitHubClient } from '@arch-orchestrator/core';
 import { StubGitHubClient } from '../github.stub';
 
 @Processor('apply_patches')

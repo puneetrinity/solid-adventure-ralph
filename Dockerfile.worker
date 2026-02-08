@@ -18,8 +18,8 @@ COPY packages/db/package.json ./packages/db/
 # Copy prisma schema
 COPY prisma ./prisma
 
-# Install dependencies - cache bust 20260208v4
-RUN npm ci --workspaces --include-workspace-root && echo "deps-20260208v4"
+# Install dependencies - cache bust openssl3-fix
+RUN npm ci --workspaces --include-workspace-root && echo "deps-openssl3-fix"
 
 # Copy source
 COPY packages ./packages
