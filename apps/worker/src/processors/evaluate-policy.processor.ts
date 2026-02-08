@@ -48,7 +48,9 @@ export class EvaluatePolicyProcessor extends WorkerHost {
       const violations: { rule: string; message: string; blocking: boolean; file: string; evidence?: string }[] = [];
 
       for (const patch of patchSet.patches) {
-        const files = patch.files as { path: string }[];
+        const files = Array.isArray(patch.files)
+          ? (patch.files as { path: string }[])
+          : [];
         const diff = patch.diff as string || '';
 
         for (const file of files) {

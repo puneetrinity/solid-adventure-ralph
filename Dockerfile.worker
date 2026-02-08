@@ -28,11 +28,11 @@ RUN npm ci --workspaces --include-workspace-root && echo "deps-openssl3-fix"
 COPY packages ./packages
 COPY apps/worker ./apps/worker
 
+# Generate Prisma client (needs schema types before TS build)
+RUN DATABASE_URL=postgresql://user:pass@localhost:5432/db npx prisma generate
+
 # Build
 RUN npm run build -w packages/db -w packages/core -w apps/worker
-
-# Generate Prisma client
-RUN npx prisma generate
 
 # Copy start script
 COPY start-worker.sh /app/start.sh

@@ -27,11 +27,11 @@ RUN npm ci --workspaces --include-workspace-root && echo "deps-20260208v2"
 COPY packages ./packages
 COPY apps/api ./apps/api
 
+# Generate Prisma client (needs schema types before TS build)
+RUN DATABASE_URL=postgresql://user:pass@localhost:5432/db npx prisma generate
+
 # Build
 RUN npm run build -w packages/db -w packages/core -w apps/api
-
-# Generate Prisma client
-RUN npx prisma generate
 
 EXPOSE 3000
 

@@ -55,6 +55,18 @@ model WorkflowRepo {
   @@index([owner, repo])
 }
 
+model GitHubAuth {
+  githubUserId String   @id
+  username     String
+  accessToken  String
+  tokenType    String?
+  scope        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([username])
+}
+
 model WorkflowEvent {
   id         String   @id @default(uuid())
   workflowId String

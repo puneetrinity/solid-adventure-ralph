@@ -118,10 +118,19 @@ export const api = {
     list: (params?: WorkflowListParams) =>
       fetchJson<PaginatedResponse<Workflow>>(`/api/workflows${qs(params)}`),
 
-    create: (params?: { title?: string; repoOwner?: string; repoName?: string; baseBranch?: string }) =>
-      fetchJson<{ id: string; state: string; repoOwner?: string; repoName?: string; baseBranch: string }>(`/api/workflows`, {
+    create: (params: {
+      goal: string;
+      context?: string;
+      title?: string;
+      repos?: Array<{ owner: string; repo: string; baseBranch?: string; role?: string }>;
+      // Legacy fields (deprecated)
+      repoOwner?: string;
+      repoName?: string;
+      baseBranch?: string;
+    }) =>
+      fetchJson<{ id: string; state: string; goal: string; context?: string; repos?: Array<{ owner: string; repo: string; baseBranch: string; role: string }> }>(`/api/workflows`, {
         method: 'POST',
-        body: JSON.stringify(params ?? {}),
+        body: JSON.stringify(params),
       }),
 
     get: (id: string) => fetchJson<Workflow>(`/api/workflows/${id}`),
@@ -184,6 +193,19 @@ export const api = {
       fetchJson<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
 
     getLoginUrl: () => `${API_BASE}/api/auth/github`,
+  },
+
+  github: {
+    listRepos: (params?: { page?: number; per_page?: number }) =>
+      fetchJson<Array<{
+        id: number;
+        name: string;
+        fullName: string;
+        private: boolean;
+        owner: string;
+        defaultBranch: string;
+        permissions: { admin?: boolean; push?: boolean; pull?: boolean };
+      }>>(`/api/auth/github/repos${qs(params)}`),
   },
 };
 

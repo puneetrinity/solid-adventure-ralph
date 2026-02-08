@@ -178,6 +178,7 @@ export class WorkflowsService {
         },
         approvals: { orderBy: { createdAt: 'asc' } },
         pullRequests: { orderBy: { createdAt: 'desc' } },
+        runs: { orderBy: { startedAt: 'desc' } },
         policyViolations: { orderBy: { createdAt: 'asc' } }
       }
     });

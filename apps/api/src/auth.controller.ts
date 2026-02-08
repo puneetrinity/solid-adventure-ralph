@@ -1,11 +1,13 @@
 import { Controller, Get, Post, Query, Res, Req, HttpException, HttpStatus, Logger } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiExcludeEndpoint } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 import * as jwt from 'jsonwebtoken';
 import { UserResponseDto, AuthCallbackResponseDto, LogoutResponseDto, ErrorResponseDto } from './dto';
+import { getPrisma } from '@arch-orchestrator/db';
 
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
+const GITHUB_OAUTH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || 'read:user repo';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production';
 const ALLOWED_USERS = (process.env.ALLOWED_GITHUB_USERS || '').split(',').map(u => u.trim().toLowerCase()).filter(Boolean);
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -30,6 +32,12 @@ interface GitHubUserResponse {
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
+  private prisma = getPrisma();
+  // Prisma client is generated at build time. Use a narrow cast here to avoid
+  // type errors if the client hasn't been regenerated yet.
+  private get gitHubAuth() {
+    return (this.prisma as unknown as { gitHubAuth: any }).gitHubAuth;
+  }
 
   private extractToken(req: Request): string | undefined {
     const authHeader = req.headers.authorization;
@@ -54,7 +62,7 @@ export class AuthController {
     const params = new URLSearchParams({
       client_id: GITHUB_CLIENT_ID,
       redirect_uri: `${FRONTEND_URL}/auth/callback`,
-      scope: 'read:user',
+      scope: GITHUB_OAUTH_SCOPES,
     });
 
     res.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
@@ -161,6 +169,24 @@ export class AuthController {
       { expiresIn: '7d' }
     );
 
+    // Store GitHub access token for repo autocomplete
+    await this.gitHubAuth.upsert({
+      where: { githubUserId: userData.id.toString() },
+      create: {
+        githubUserId: userData.id.toString(),
+        username: userData.login,
+        accessToken: tokenData.access_token,
+        tokenType: tokenData.token_type,
+        scope: tokenData.scope,
+      },
+      update: {
+        username: userData.login,
+        accessToken: tokenData.access_token,
+        tokenType: tokenData.token_type,
+        scope: tokenData.scope,
+      },
+    });
+
     // Set cookie
     const isProduction = process.env.NODE_ENV === 'production';
     res.cookie('auth_token', token, {
@@ -226,5 +252,97 @@ export class AuthController {
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie('auth_token');
     return { ok: true };
+  }
+
+  @Get('github/repos')
+  @ApiOperation({ summary: 'List GitHub repositories', description: 'List repositories accessible by the authenticated user' })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number', example: 1 })
+  @ApiQuery({ name: 'per_page', required: false, description: 'Items per page', example: 100 })
+  @ApiResponse({ status: 200, description: 'Repository list' })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  async listRepos(
+    @Req() req: Request,
+    @Query('page') pageParam?: string,
+    @Query('per_page') perPageParam?: string
+  ) {
+    const token = this.extractToken(req);
+    if (!token) {
+      this.logger.warn(`Auth token missing (origin=${req.headers.origin ?? 'n/a'}, host=${req.headers.host ?? 'n/a'})`);
+      throw new HttpException(
+        { errorCode: 'NOT_AUTHENTICATED', message: 'Not authenticated' },
+        HttpStatus.UNAUTHORIZED
+      );
+    }
+
+    let decoded: jwt.JwtPayload;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload;
+    } catch {
+      this.logger.warn(`Invalid auth token (origin=${req.headers.origin ?? 'n/a'}, host=${req.headers.host ?? 'n/a'})`);
+      throw new HttpException(
+        { errorCode: 'INVALID_TOKEN', message: 'Invalid or expired token' },
+        HttpStatus.UNAUTHORIZED
+      );
+    }
+
+    const githubUserId = decoded.sub?.toString();
+    if (!githubUserId) {
+      throw new HttpException(
+        { errorCode: 'INVALID_TOKEN', message: 'Invalid or expired token' },
+        HttpStatus.UNAUTHORIZED
+      );
+    }
+
+    const auth = await this.gitHubAuth.findUnique({
+      where: { githubUserId },
+    });
+    if (!auth) {
+      throw new HttpException(
+        { errorCode: 'GITHUB_AUTH_REQUIRED', message: 'GitHub OAuth is required to list repositories' },
+        HttpStatus.UNAUTHORIZED
+      );
+    }
+
+    const page = Math.max(1, Number(pageParam) || 1);
+    const perPage = Math.min(100, Math.max(1, Number(perPageParam) || 100));
+
+    const repoResponse = await fetch(
+      `https://api.github.com/user/repos?per_page=${perPage}&page=${page}&sort=updated&direction=desc`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.accessToken}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'arch-orchestrator',
+        },
+      }
+    );
+
+    if (!repoResponse.ok) {
+      this.logger.error(`GitHub repo list failed: ${repoResponse.status}`);
+      throw new HttpException(
+        { errorCode: 'GITHUB_API_FAILED', message: 'Failed to fetch repositories from GitHub' },
+        HttpStatus.BAD_GATEWAY
+      );
+    }
+
+    const repoData = (await repoResponse.json()) as Array<{
+      id: number;
+      name: string;
+      full_name: string;
+      private: boolean;
+      owner: { login: string };
+      default_branch: string;
+      permissions?: { admin?: boolean; push?: boolean; pull?: boolean };
+    }>;
+
+    return repoData.map(repo => ({
+      id: repo.id,
+      name: repo.name,
+      fullName: repo.full_name,
+      private: repo.private,
+      owner: repo.owner.login,
+      defaultBranch: repo.default_branch,
+      permissions: repo.permissions ?? {},
+    }));
   }
 }

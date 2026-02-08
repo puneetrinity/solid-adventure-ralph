@@ -1,20 +1,34 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { RefreshCw, AlertCircle, Inbox } from 'lucide-react';
+import { RefreshCw, AlertCircle, Inbox, Plus, X } from 'lucide-react';
 import { useWorkflows } from '../hooks/use-workflows';
 import { WorkflowStatusBadge } from '../components/workflow';
 import { Modal, Toast, useToast } from '../components/ui';
 import { api } from '../api/client';
+import type { GitHubRepo } from '../types';
+
+interface RepoEntry {
+  owner: string;
+  repo: string;
+  baseBranch: string;
+  role: 'primary' | 'secondary';
+}
 
 export function WorkflowsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // New fields
+  const [createGoal, setCreateGoal] = useState('');
+  const [createContext, setCreateContext] = useState('');
   const [createTitle, setCreateTitle] = useState('');
-  const [createRepoOwner, setCreateRepoOwner] = useState('puneetrinity');
-  const [createRepoName, setCreateRepoName] = useState('arch-orchestrator-sandbox');
-  const [createBaseBranch, setCreateBaseBranch] = useState('main');
+  const [createRepos, setCreateRepos] = useState<RepoEntry[]>([
+    { owner: 'puneetrinity', repo: 'arch-orchestrator-sandbox', baseBranch: 'main', role: 'primary' }
+  ]);
   const [isCreating, setIsCreating] = useState(false);
+  const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
+  const [reposLoading, setReposLoading] = useState(false);
+  const [reposError, setReposError] = useState<string | null>(null);
   const { workflows, isLoading, error, nextCursor, refetch, loadMore } = useWorkflows({
     status: statusFilter || undefined,
   });
@@ -37,28 +51,118 @@ export function WorkflowsPage() {
     return sha.substring(0, 7);
   };
 
+  useEffect(() => {
+    if (!showCreateModal || reposLoading || availableRepos.length > 0) return;
+    setReposLoading(true);
+    setReposError(null);
+    api.github
+      .listRepos({ per_page: 100 })
+      .then(repos => setAvailableRepos(repos))
+      .catch(err => {
+        const message = err instanceof Error ? err.message : 'Failed to load repositories';
+        setReposError(message);
+      })
+      .finally(() => setReposLoading(false));
+  }, [showCreateModal, reposLoading, availableRepos.length]);
+
+  const addRepo = () => {
+    setCreateRepos([
+      ...createRepos,
+      { owner: '', repo: '', baseBranch: 'main', role: 'secondary' }
+    ]);
+  };
+
+  const removeRepo = (index: number) => {
+    if (createRepos.length <= 1) return;
+    const newRepos = createRepos.filter((_, i) => i !== index);
+    // Ensure at least one primary
+    if (!newRepos.some(r => r.role === 'primary') && newRepos.length > 0) {
+      newRepos[0].role = 'primary';
+    }
+    setCreateRepos(newRepos);
+  };
+
+  const updateRepo = (index: number, field: keyof RepoEntry, value: string) => {
+    setCreateRepos(prev => {
+      const newRepos = [...prev];
+      if (field === 'role') {
+        // If setting this repo as primary, remove primary from others
+        if (value === 'primary') {
+          newRepos.forEach((r, i) => {
+            r.role = i === index ? 'primary' : 'secondary';
+          });
+        } else {
+          newRepos[index].role = value as 'primary' | 'secondary';
+        }
+      } else if (field === 'owner') {
+        newRepos[index].owner = value;
+      } else if (field === 'repo') {
+        newRepos[index].repo = value;
+      } else if (field === 'baseBranch') {
+        newRepos[index].baseBranch = value;
+      }
+      return newRepos;
+    });
+  };
+
+  const applyRepoSelection = (index: number, repoOption: GitHubRepo) => {
+    setCreateRepos(prev => {
+      const newRepos = [...prev];
+      newRepos[index] = {
+        ...newRepos[index],
+        owner: repoOption.owner,
+        repo: repoOption.name,
+        baseBranch: repoOption.defaultBranch,
+      };
+      return newRepos;
+    });
+  };
+
   const handleCreateWorkflow = async () => {
     if (isCreating) return;
 
-    const repoOwner = createRepoOwner.trim();
-    const repoName = createRepoName.trim();
+    const goal = createGoal.trim();
+    if (!goal) {
+      showToast('Goal is required', 'error');
+      return;
+    }
 
-    if (!repoOwner || !repoName) {
-      showToast('Repository owner and name are required', 'error');
+    // Validate repos
+    const validRepos = createRepos.filter(r => r.owner.trim() && r.repo.trim());
+    if (validRepos.length === 0) {
+      showToast('At least one repository is required', 'error');
+      return;
+    }
+
+    // Ensure exactly one primary
+    const primaryCount = validRepos.filter(r => r.role === 'primary').length;
+    if (primaryCount === 0) {
+      validRepos[0].role = 'primary';
+    } else if (primaryCount > 1) {
+      showToast('Only one repository can be primary', 'error');
       return;
     }
 
     setIsCreating(true);
     try {
       await api.workflows.create({
+        goal,
+        context: createContext.trim() || undefined,
         title: createTitle.trim() || undefined,
-        repoOwner,
-        repoName,
-        baseBranch: createBaseBranch.trim() || 'main',
+        repos: validRepos.map(r => ({
+          owner: r.owner.trim(),
+          repo: r.repo.trim(),
+          baseBranch: r.baseBranch.trim() || 'main',
+          role: r.role
+        }))
       });
       showToast('Workflow created', 'success');
       setShowCreateModal(false);
+      // Reset form
+      setCreateGoal('');
+      setCreateContext('');
       setCreateTitle('');
+      setCreateRepos([{ owner: 'puneetrinity', repo: 'arch-orchestrator-sandbox', baseBranch: 'main', role: 'primary' }]);
       await refetch();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create workflow';
@@ -241,6 +345,36 @@ export function WorkflowsPage() {
         title="Create Workflow"
       >
         <div className="space-y-4">
+          {/* Goal - Required */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Goal *
+            </label>
+            <textarea
+              value={createGoal}
+              onChange={e => setCreateGoal(e.target.value)}
+              placeholder="Describe what you want to accomplish in plain English. E.g., 'Add a login button to the header that redirects to /auth'"
+              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[80px] resize-y"
+              disabled={isCreating}
+            />
+            <p className="text-xs text-gray-500 mt-1">Plain English description of what the AI should implement</p>
+          </div>
+
+          {/* Context - Optional */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Context (optional)
+            </label>
+            <textarea
+              value={createContext}
+              onChange={e => setCreateContext(e.target.value)}
+              placeholder="Add extra context: links to issues, acceptance criteria, constraints, etc."
+              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[60px] resize-y"
+              disabled={isCreating}
+            />
+          </div>
+
+          {/* Title - Optional */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Title (optional)
@@ -249,53 +383,121 @@ export function WorkflowsPage() {
               type="text"
               value={createTitle}
               onChange={e => setCreateTitle(e.target.value)}
-              placeholder="E.g., Update README"
+              placeholder="Short title (auto-generated from goal if empty)"
               className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
               disabled={isCreating}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Repo Owner *
-              </label>
-              <input
-                type="text"
-                value={createRepoOwner}
-                onChange={e => setCreateRepoOwner(e.target.value)}
-                placeholder="puneetrinity"
-                className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-                disabled={isCreating}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Repo Name *
-              </label>
-              <input
-                type="text"
-                value={createRepoName}
-                onChange={e => setCreateRepoName(e.target.value)}
-                placeholder="arch-orchestrator-sandbox"
-                className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-                disabled={isCreating}
-              />
-            </div>
-          </div>
+
+          {/* Repositories */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Base Branch
-            </label>
-            <input
-              type="text"
-              value={createBaseBranch}
-              onChange={e => setCreateBaseBranch(e.target.value)}
-              placeholder="main"
-              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-              disabled={isCreating}
-            />
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Repositories *
+              </label>
+              <button
+                type="button"
+                onClick={addRepo}
+                disabled={isCreating}
+                className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50"
+              >
+                <Plus className="h-3 w-3" />
+                Add Repository
+              </button>
+            </div>
+            <div className="space-y-3">
+              {createRepos.map((repo, index) => (
+                <div key={index} className="p-3 bg-gray-50 rounded-md border border-gray-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-gray-500">
+                      Repository {index + 1}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={repo.role}
+                        onChange={e => updateRepo(index, 'role', e.target.value)}
+                        disabled={isCreating}
+                        className="text-xs px-2 py-1 border border-gray-200 rounded bg-white"
+                      >
+                        <option value="primary">Primary</option>
+                        <option value="secondary">Secondary</option>
+                      </select>
+                      {createRepos.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeRepo(index)}
+                          disabled={isCreating}
+                          className="text-gray-400 hover:text-red-500 disabled:opacity-50"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-3">
+                      <select
+                        value=""
+                        onChange={e => {
+                          const value = e.target.value;
+                          if (!value) return;
+                          const selected = availableRepos.find(r => r.fullName === value);
+                          if (!selected) return;
+                          applyRepoSelection(index, selected);
+                        }}
+                        disabled={isCreating || availableRepos.length === 0}
+                        className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm bg-white disabled:opacity-50"
+                      >
+                        <option value="">
+                          {reposLoading
+                            ? 'Loading repositories...'
+                            : availableRepos.length === 0
+                            ? 'No GitHub repositories available'
+                            : 'Pick from GitHub (optional)'}
+                        </option>
+                        {availableRepos.map(repoOption => (
+                          <option key={repoOption.id} value={repoOption.fullName}>
+                            {repoOption.fullName}
+                            {repoOption.private ? ' (private)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      type="text"
+                      value={repo.owner}
+                      onChange={e => updateRepo(index, 'owner', e.target.value)}
+                      placeholder="Owner"
+                      className="px-2 py-1.5 border border-gray-200 rounded text-sm"
+                      disabled={isCreating}
+                    />
+                    <input
+                      type="text"
+                      value={repo.repo}
+                      onChange={e => updateRepo(index, 'repo', e.target.value)}
+                      placeholder="Repository"
+                      className="px-2 py-1.5 border border-gray-200 rounded text-sm"
+                      disabled={isCreating}
+                    />
+                    <input
+                      type="text"
+                      value={repo.baseBranch}
+                      onChange={e => updateRepo(index, 'baseBranch', e.target.value)}
+                      placeholder="Branch"
+                      className="px-2 py-1.5 border border-gray-200 rounded text-sm"
+                      disabled={isCreating}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            {reposError && (
+              <p className="text-xs text-red-600 mt-1">{reposError}</p>
+            )}
+            <p className="text-xs text-gray-500 mt-1">One repository must be marked as primary</p>
           </div>
-          <div className="flex items-center justify-end gap-2">
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-200">
             <button
               onClick={() => setShowCreateModal(false)}
               disabled={isCreating}
@@ -305,7 +507,7 @@ export function WorkflowsPage() {
             </button>
             <button
               onClick={handleCreateWorkflow}
-              disabled={isCreating}
+              disabled={isCreating || !createGoal.trim()}
               className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
             >
               {isCreating ? 'Creating...' : 'Create'}

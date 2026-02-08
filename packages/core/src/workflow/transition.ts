@@ -13,6 +13,18 @@ export type TransitionContext = {
   hasBlockingPolicyViolations?: boolean;
   hasPolicyBeenEvaluated?: boolean;
 
+  // Multi-repo support: PatchSet tracking
+  patchSetCounts?: {
+    total: number;
+    proposed: number;
+    approved: number;
+    applied: number;
+  };
+  patchSetsNeedingPolicy?: string[];
+  patchSetsNeedingApproval?: string[];
+  approvedPatchSetIds?: string[];
+  allPatchSetsApplied?: boolean;
+
   // optional: attempt counts, retry budgets later
 };
 
@@ -48,11 +60,26 @@ export function transition(
     }
 
     if (event.type === 'E_JOB_COMPLETED' && event.stage === 'ingest_context') {
-      if (ctx.hasPatchSets && ctx.latestPatchSetId) {
-        // Transition to PATCHES_PROPOSED and immediately enqueue policy evaluation
-        return result('PATCHES_PROPOSED', [
-          { queue: 'workflow', name: 'evaluate_policy', payload: { workflowId: ctx.workflowId, patchSetId: ctx.latestPatchSetId } }
-        ], 'Ingest completed with patch sets, enqueueing policy evaluation');
+      if (ctx.hasPatchSets) {
+        // Multi-repo: enqueue policy evaluation for ALL PatchSets
+        const patchSetIds = ctx.patchSetsNeedingPolicy?.length
+          ? ctx.patchSetsNeedingPolicy
+          : ctx.latestPatchSetId
+            ? [ctx.latestPatchSetId]
+            : [];
+
+        if (patchSetIds.length === 0) {
+          return result('NEEDS_HUMAN', [], 'Ingest completed but no patch sets to evaluate');
+        }
+
+        const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+          queue: 'workflow',
+          name: 'evaluate_policy',
+          payload: { workflowId: ctx.workflowId, patchSetId }
+        }));
+
+        const count = ctx.patchSetCounts?.total || 1;
+        return result('PATCHES_PROPOSED', jobs, `Ingest completed with ${count} patch set(s), enqueueing policy evaluation`);
       }
       return result('NEEDS_HUMAN', [], 'Ingest completed but no patch sets created');
     }
@@ -69,11 +96,31 @@ export function transition(
       if (event.result.hasBlockingViolations) {
         return result('BLOCKED_POLICY', [], 'Policy violations detected in proposed patches');
       }
-      // Policy passed (or only warnings), move to approval
-      return result('WAITING_USER_APPROVAL', [], 'Policy evaluation passed, awaiting user approval');
+
+      // Check if there are more PatchSets needing policy evaluation
+      const needsPolicy = ctx.patchSetsNeedingPolicy?.length || 0;
+      if (needsPolicy > 0) {
+        // More to evaluate - stay in PATCHES_PROPOSED
+        return result('PATCHES_PROPOSED', [], `Policy passed for one patch set, ${needsPolicy} more pending evaluation`);
+      }
+
+      // All policies evaluated, move to approval
+      const needsApproval = ctx.patchSetsNeedingApproval?.length || 0;
+      return result('WAITING_USER_APPROVAL', [], `All policies evaluated, ${needsApproval} patch set(s) awaiting approval`);
     }
 
-    // Trigger policy evaluation if patchsets exist
+    // Trigger policy evaluation for any PatchSets that still need it
+    const patchSetsNeedingPolicy = ctx.patchSetsNeedingPolicy || [];
+    if (patchSetsNeedingPolicy.length > 0) {
+      const jobs: EnqueueJob[] = patchSetsNeedingPolicy.map(patchSetId => ({
+        queue: 'workflow',
+        name: 'evaluate_policy',
+        payload: { workflowId: ctx.workflowId, patchSetId }
+      }));
+      return result('PATCHES_PROPOSED', jobs, `Enqueueing policy evaluation for ${patchSetsNeedingPolicy.length} patch set(s)`);
+    }
+
+    // Fallback to latest patch set for backwards compat
     if (ctx.hasPatchSets && ctx.latestPatchSetId) {
       return result('PATCHES_PROPOSED', [
         { queue: 'workflow', name: 'evaluate_policy', payload: { workflowId: ctx.workflowId, patchSetId: ctx.latestPatchSetId } }
@@ -86,16 +133,30 @@ export function transition(
   // WAITING_USER_APPROVAL state transitions
   if (current === 'WAITING_USER_APPROVAL') {
     if (event.type === 'E_APPROVAL_RECORDED') {
+      // Check if policy has already been evaluated and blocked
+      if (ctx.hasBlockingPolicyViolations) {
+        return result('BLOCKED_POLICY', [], 'Approval recorded but policy violations exist');
+      }
+
+      // Multi-repo: enqueue apply_patches for ALL approved PatchSets
+      const approvedIds = ctx.approvedPatchSetIds || [];
+      if (approvedIds.length > 0) {
+        const jobs: EnqueueJob[] = approvedIds.map(patchSetId => ({
+          queue: 'workflow',
+          name: 'apply_patches',
+          payload: { workflowId: ctx.workflowId, patchSetId }
+        }));
+        return result('APPLYING_PATCHES', jobs, `Approval recorded, enqueueing apply_patches for ${approvedIds.length} patch set(s)`);
+      }
+
+      // Fallback to latest for backwards compat
       if (ctx.hasApprovalToApply && ctx.latestPatchSetId) {
-        // Check if policy has already been evaluated and blocked
-        if (ctx.hasBlockingPolicyViolations) {
-          return result('BLOCKED_POLICY', [], 'Approval recorded but policy violations exist');
-        }
         return result('APPLYING_PATCHES', [
           { queue: 'workflow', name: 'apply_patches', payload: { workflowId: ctx.workflowId, patchSetId: ctx.latestPatchSetId } }
         ], 'Approval recorded, enqueueing apply_patches');
       }
-      return result('WAITING_USER_APPROVAL', [], 'Approval event received but approval not valid');
+
+      return result('WAITING_USER_APPROVAL', [], 'Approval event received but no approved patch sets found');
     }
 
     // Policy evaluation in WAITING_USER_APPROVAL state
@@ -122,6 +183,19 @@ export function transition(
   if (current === 'APPLYING_PATCHES') {
     if (event.type === 'E_JOB_COMPLETED' && event.stage === 'apply_patches') {
       if (event.result?.prNumber || event.result?.pr) {
+        // Multi-repo: check if all PatchSets are now applied
+        if (ctx.allPatchSetsApplied) {
+          const total = ctx.patchSetCounts?.total || 1;
+          return result('PR_OPEN', [], `All ${total} patch set(s) applied, PRs opened`);
+        }
+
+        // More PatchSets still being applied - stay in APPLYING_PATCHES
+        const applied = (ctx.patchSetCounts?.applied || 0) + 1; // +1 for this one
+        const total = ctx.patchSetCounts?.total || 1;
+        if (applied < total) {
+          return result('APPLYING_PATCHES', [], `Patch set applied (${applied}/${total}), waiting for others`);
+        }
+
         return result('PR_OPEN', [], 'Patches applied, PR opened');
       }
       return result('BLOCKED_POLICY', [], 'Apply completed but no PR created');

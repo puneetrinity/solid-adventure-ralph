@@ -212,7 +212,7 @@ export function PatchDetailPage() {
           </div>
           <div className="overflow-x-auto">
             {patch.diff ? (
-              <DiffViewer diff={patch.diff} />
+              <DiffViewer diff={patch.diff} filePath={patch.filePath} />
             ) : (
               <div className="p-6 text-center text-gray-500">
                 No diff content available

@@ -45,14 +45,18 @@ export class ApplyPatchesProcessor extends WorkerHost {
       throw new Error(`PatchSet ${patchSetId} does not belong to workflow ${workflowId}`);
     }
 
-    // Get repo info from patchSet, workflow.repos, or legacy fields
+    // Get repo info from patchSet, then look up matching repo for baseBranch
     const repoOwner = patchSet.repoOwner ||
       workflow.repos?.find(r => r.role === 'primary')?.owner ||
       workflow.repoOwner;
     const repoName = patchSet.repoName ||
       workflow.repos?.find(r => r.role === 'primary')?.repo ||
       workflow.repoName;
-    const baseBranch = workflow.repos?.find(r => r.role === 'primary')?.baseBranch ||
+
+    // Look up baseBranch from the matching repo (not always primary)
+    const matchingRepo = workflow.repos?.find(r => r.owner === repoOwner && r.repo === repoName);
+    const baseBranch = matchingRepo?.baseBranch ||
+      workflow.repos?.find(r => r.role === 'primary')?.baseBranch ||
       workflow.baseBranch;
 
     if (!repoOwner || !repoName) {

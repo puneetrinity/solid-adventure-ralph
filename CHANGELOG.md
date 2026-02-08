@@ -80,11 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vite + React + TypeScript frontend
 - Tailwind CSS styling
 - Workflow list with pagination and filtering
-- Workflow detail with tabs (Overview, Timeline, Artifacts, Patches)
+- Workflow detail with tabs (Overview, Timeline, Artifacts, Patches, Policy, Runs, Architecture)
 - Patch diff viewer with syntax highlighting
 - Approval/Reject/Request Changes UI
 - Real-time polling for updates
 - GitHub OAuth authentication
+- GitHub repo autocomplete in workflow create modal
 - API hardening with CORS and error normalization
 - Railway deployment configuration
 
