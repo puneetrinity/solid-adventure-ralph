@@ -118,6 +118,12 @@ export const api = {
     list: (params?: WorkflowListParams) =>
       fetchJson<PaginatedResponse<Workflow>>(`/api/workflows${qs(params)}`),
 
+    create: (title?: string) =>
+      fetchJson<{ id: string; state: string }>(`/api/workflows`, {
+        method: 'POST',
+        body: JSON.stringify({ title }),
+      }),
+
     get: (id: string) => fetchJson<Workflow>(`/api/workflows/${id}`),
 
     approve: (id: string, patchSetId?: string) =>

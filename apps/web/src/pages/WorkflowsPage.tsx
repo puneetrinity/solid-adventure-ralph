@@ -3,13 +3,19 @@ import { Link } from 'react-router-dom';
 import { RefreshCw, AlertCircle, Inbox } from 'lucide-react';
 import { useWorkflows } from '../hooks/use-workflows';
 import { WorkflowStatusBadge } from '../components/workflow';
+import { Modal, Toast, useToast } from '../components/ui';
+import { api } from '../api/client';
 
 export function WorkflowsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createTitle, setCreateTitle] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
   const { workflows, isLoading, error, nextCursor, refetch, loadMore } = useWorkflows({
     status: statusFilter || undefined,
   });
+  const { toast, showToast, hideToast } = useToast();
 
   // Client-side filter by ID substring
   const filteredWorkflows = useMemo(() => {
@@ -28,18 +34,48 @@ export function WorkflowsPage() {
     return sha.substring(0, 7);
   };
 
+  const handleCreateWorkflow = async () => {
+    if (isCreating) return;
+    setIsCreating(true);
+    try {
+      const title = createTitle.trim();
+      await api.workflows.create(title || undefined);
+      showToast('Workflow created', 'success');
+      setShowCreateModal(false);
+      setCreateTitle('');
+      await refetch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create workflow';
+      showToast(message, 'error');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
+      {toast && (
+        <Toast message={toast.message} type={toast.type} onClose={hideToast} />
+      )}
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Workflows</h1>
-        <button
-          onClick={() => refetch()}
-          disabled={isLoading}
-          className="flex items-center gap-2 px-3 py-2 text-sm bg-white border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-50"
-        >
-          <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+          >
+            New Workflow
+          </button>
+          <button
+            onClick={() => refetch()}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-white border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -177,6 +213,49 @@ export function WorkflowsPage() {
           <p className="text-sm text-gray-500">Loading workflows...</p>
         </div>
       )}
+
+      {/* Create Workflow Modal */}
+      <Modal
+        isOpen={showCreateModal}
+        onClose={() => {
+          if (!isCreating) {
+            setShowCreateModal(false);
+          }
+        }}
+        title="Create Workflow"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Title (optional)
+            </label>
+            <input
+              type="text"
+              value={createTitle}
+              onChange={e => setCreateTitle(e.target.value)}
+              placeholder="E.g., Update README"
+              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
+              disabled={isCreating}
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={() => setShowCreateModal(false)}
+              disabled={isCreating}
+              className="px-3 py-2 text-sm bg-white border border-gray-200 rounded-md hover:bg-gray-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleCreateWorkflow}
+              disabled={isCreating}
+              className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              {isCreating ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
