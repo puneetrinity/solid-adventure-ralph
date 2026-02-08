@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { parseRedisUrl } from './redis';
 import { IngestContextProcessor } from './processors/ingest-context.processor';
 import { ApplyPatchesProcessor } from './processors/apply-patches.processor';
+import { EvaluatePolicyProcessor } from './processors/evaluate-policy.processor';
 import { OrchestrateProcessor } from './processors/orchestrate.processor';
 import { OrchestratorService } from './orchestrator/orchestrator.service';
 import { StubGitHubClient, type GitHubClient } from '@arch-orchestrator/core';
@@ -118,6 +119,7 @@ function createGitHubClient(): GitHubClient {
     // Stage processors
     IngestContextProcessor,
     ApplyPatchesProcessor,
+    EvaluatePolicyProcessor,
 
     // GitHub client - real when GITHUB_TOKEN is set, stub otherwise
     {

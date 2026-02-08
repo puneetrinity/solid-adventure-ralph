@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards, Req, HttpException, HttpStatus } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiParam, ApiCookieAuth } from '@nestjs/swagger';
 import { WorkflowsService } from './workflows.service';
 import { AuthGuard, AuthenticatedRequest } from './auth.guard';
@@ -41,22 +41,12 @@ export class WorkflowsController {
   @ApiResponse({ status: 201, description: 'Workflow created', type: WorkflowResponseDto })
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   async createWorkflow(@Body() body: CreateWorkflowDto) {
-    try {
-      return await this.workflows.create({
-        title: body?.title,
-        repoOwner: body?.repoOwner,
-        repoName: body?.repoName,
-        baseBranch: body?.baseBranch,
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name === 'BadRequestException') {
-        throw new HttpException(
-          { errorCode: 'VALIDATION_ERROR', message: err.message },
-          HttpStatus.BAD_REQUEST
-        );
-      }
-      throw err;
-    }
+    return this.workflows.create({
+      title: body?.title,
+      repoOwner: body?.repoOwner,
+      repoName: body?.repoName,
+      baseBranch: body?.baseBranch,
+    });
   }
 
   @Get(':id')

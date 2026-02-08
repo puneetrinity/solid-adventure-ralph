@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { getPrisma } from '@arch-orchestrator/db';
@@ -77,9 +77,7 @@ export class WorkflowsService {
 
     // Validate required repo fields
     if (!repoOwner?.trim() || !repoName?.trim()) {
-      const error = new Error('repoOwner and repoName are required');
-      error.name = 'BadRequestException';
-      throw error;
+      throw new BadRequestException('repoOwner and repoName are required');
     }
 
     const workflow = await this.prisma.workflow.create({

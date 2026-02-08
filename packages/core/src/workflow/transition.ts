@@ -48,8 +48,11 @@ export function transition(
     }
 
     if (event.type === 'E_JOB_COMPLETED' && event.stage === 'ingest_context') {
-      if (ctx.hasPatchSets) {
-        return result('PATCHES_PROPOSED', [], 'Ingest completed with patch sets');
+      if (ctx.hasPatchSets && ctx.latestPatchSetId) {
+        // Transition to PATCHES_PROPOSED and immediately enqueue policy evaluation
+        return result('PATCHES_PROPOSED', [
+          { queue: 'workflow', name: 'evaluate_policy', payload: { workflowId: ctx.workflowId, patchSetId: ctx.latestPatchSetId } }
+        ], 'Ingest completed with patch sets, enqueueing policy evaluation');
       }
       return result('NEEDS_HUMAN', [], 'Ingest completed but no patch sets created');
     }
