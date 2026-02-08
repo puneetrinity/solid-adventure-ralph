@@ -21,7 +21,8 @@ export class StubGitHubClient implements GitHubClient {
       name: 'stub-repo',
       fullName: 'stub-owner/stub-repo',
       defaultBranch: 'main',
-      private: false
+      private: false,
+      htmlUrl: 'https://github.com/stub-owner/stub-repo'
     };
   }
 
