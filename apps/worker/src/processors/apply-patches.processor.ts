@@ -14,7 +14,7 @@ export class ApplyPatchesProcessor extends WorkerHost {
 
   constructor(
     @Inject(GITHUB_CLIENT_TOKEN) private readonly github: GitHubClient,
-    @InjectQueue('workflow') private readonly workflowQueue: Queue
+    @InjectQueue('orchestrate') private readonly orchestrateQueue: Queue
   ) {
     super();
   }
@@ -105,7 +105,7 @@ export class ApplyPatchesProcessor extends WorkerHost {
       });
 
       // Emit success event to orchestrator
-      await this.workflowQueue.add('orchestrate', {
+      await this.orchestrateQueue.add('orchestrate', {
         workflowId,
         event: {
           type: 'E_JOB_COMPLETED',
@@ -137,7 +137,7 @@ export class ApplyPatchesProcessor extends WorkerHost {
       });
 
       // Emit failure event to orchestrator
-      await this.workflowQueue.add('orchestrate', {
+      await this.orchestrateQueue.add('orchestrate', {
         workflowId,
         event: {
           type: 'E_JOB_FAILED',

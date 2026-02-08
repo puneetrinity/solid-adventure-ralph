@@ -8,7 +8,6 @@ import {
   RunRecorder,
   type GitHubClient,
   LLMRunner,
-  GroqLLMProvider,
   createGroqProvider,
 } from '@arch-orchestrator/core';
 import { GITHUB_CLIENT_TOKEN } from '../constants';
@@ -21,7 +20,7 @@ export class IngestContextProcessor extends WorkerHost {
 
   constructor(
     @Inject(GITHUB_CLIENT_TOKEN) private readonly github: GitHubClient,
-    @InjectQueue('workflow') private readonly workflowQueue: Queue
+    @InjectQueue('orchestrate') private readonly orchestrateQueue: Queue
   ) {
     super();
   }
@@ -213,7 +212,7 @@ Generate a small improvement to this README. Respond with ONLY a JSON object in 
       });
 
       // Emit success event to orchestrator
-      await this.workflowQueue.add('orchestrate', {
+      await this.orchestrateQueue.add('orchestrate', {
         workflowId,
         event: {
           type: 'E_JOB_COMPLETED',
@@ -233,7 +232,7 @@ Generate a small improvement to this README. Respond with ONLY a JSON object in 
       });
 
       // Emit failure event to orchestrator
-      await this.workflowQueue.add('orchestrate', {
+      await this.orchestrateQueue.add('orchestrate', {
         workflowId,
         event: {
           type: 'E_JOB_FAILED',
