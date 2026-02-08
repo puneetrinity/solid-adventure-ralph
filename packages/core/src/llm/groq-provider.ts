@@ -9,17 +9,15 @@ import { randomUUID } from 'crypto';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-// Groq pricing (in cents per 1M tokens) - updated Feb 2026
+// Groq pricing (in cents per 1M tokens)
 const GROQ_PRICING: Record<string, { input: number; output: number }> = {
-  // Llama 4 models (recommended)
-  'llama-4-scout-17b-16e-instruct': { input: 11, output: 34 },
-  'llama-4-maverick-17b-128e-instruct': { input: 20, output: 60 },
-  // Llama 3.x models
+  // Llama 3.x models (recommended)
   'llama-3.3-70b-versatile': { input: 59, output: 79 },
+  'llama-3.1-70b-versatile': { input: 59, output: 79 },
   'llama-3.1-8b-instant': { input: 5, output: 8 },
   // Other models
-  'qwen3-32b': { input: 29, output: 59 },
   'mixtral-8x7b-32768': { input: 24, output: 24 },
+  'gemma2-9b-it': { input: 20, output: 20 },
 };
 
 interface GroqResponse {
@@ -51,7 +49,7 @@ export class GroqLLMProvider implements LLMProvider {
 
   constructor(config: { apiKey: string; modelId?: string; timeout?: number }) {
     this.apiKey = config.apiKey;
-    this.modelId = config.modelId ?? 'llama-4-scout-17b-16e-instruct';
+    this.modelId = config.modelId ?? 'llama-3.3-70b-versatile';
     this.timeout = config.timeout ?? 60000;
   }
 
@@ -159,6 +157,6 @@ export function createGroqProvider(): GroqLLMProvider | null {
 
   return new GroqLLMProvider({
     apiKey,
-    modelId: process.env.GROQ_MODEL_ID ?? 'llama-4-scout-17b-16e-instruct',
+    modelId: process.env.GROQ_MODEL_ID ?? 'llama-3.3-70b-versatile',
   });
 }
