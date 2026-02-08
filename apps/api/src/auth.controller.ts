@@ -181,6 +181,7 @@ export class AuthController {
   getMe(@Req() req: Request) {
     const token = req.cookies?.auth_token;
     if (!token) {
+      this.logger.warn(`Auth token missing (origin=${req.headers.origin ?? 'n/a'}, host=${req.headers.host ?? 'n/a'})`);
       throw new HttpException(
         { errorCode: 'NOT_AUTHENTICATED', message: 'Not authenticated' },
         HttpStatus.UNAUTHORIZED
@@ -196,6 +197,7 @@ export class AuthController {
         avatarUrl: decoded.avatarUrl,
       };
     } catch {
+      this.logger.warn(`Invalid auth token (origin=${req.headers.origin ?? 'n/a'}, host=${req.headers.host ?? 'n/a'})`);
       throw new HttpException(
         { errorCode: 'INVALID_TOKEN', message: 'Invalid or expired token' },
         HttpStatus.UNAUTHORIZED
