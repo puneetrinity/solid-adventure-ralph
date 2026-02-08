@@ -127,6 +127,25 @@ export class LLMRunner {
       try {
         const response = await this.provider.call(input);
 
+        // Check if provider returned an error
+        if (!response.success) {
+          if (this.shouldRetry('server_error', attempt)) {
+            retryCount++;
+            await this.delay(attempt);
+            continue;
+          }
+          return this.createErrorResponse<T>(
+            'PROVIDER_ERROR',
+            response.error ?? 'Unknown provider error',
+            requestId,
+            promptVersion,
+            role,
+            startTime,
+            response.usage,
+            retryCount
+          );
+        }
+
         // Update session usage
         this.updateSessionUsage(response.usage);
 
