@@ -30,12 +30,35 @@ export async function loadTransitionContext(
 
   const latestPatchSet = workflow.patchSets[0];
   const hasApproval = workflow.approvals.length > 0;
+  const latestPatchSetId = latestPatchSet?.id;
+
+  // Phase 4: load policy violations for the latest patch set
+  let hasBlockingPolicyViolations = false;
+  let hasPolicyBeenEvaluated = false;
+
+  if (latestPatchSetId) {
+    const violations = await prisma.policyViolation.findMany({
+      where: { patchSetId: latestPatchSetId }
+    });
+
+    hasBlockingPolicyViolations = violations.some(v => v.severity === 'BLOCK');
+    hasPolicyBeenEvaluated = violations.length > 0;
+  }
+
+  if (!hasPolicyBeenEvaluated) {
+    const evalEvent = await prisma.workflowEvent.findFirst({
+      where: { workflowId, type: 'worker.evaluate_policy.completed' },
+      orderBy: { createdAt: 'desc' }
+    });
+    hasPolicyBeenEvaluated = Boolean(evalEvent);
+  }
 
   return {
     workflowId,
     hasPatchSets: workflow.patchSets.length > 0,
-    latestPatchSetId: latestPatchSet?.id,
+    latestPatchSetId,
     hasApprovalToApply: hasApproval,
-    hasBlockingPolicyViolations: false // Phase 4: load from policy_violations table
+    hasBlockingPolicyViolations,
+    hasPolicyBeenEvaluated
   };
 }
