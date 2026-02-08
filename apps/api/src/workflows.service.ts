@@ -72,6 +72,11 @@ export class WorkflowsService {
   async create(params: { title?: string; repoOwner?: string; repoName?: string; baseBranch?: string }) {
     const { title, repoOwner, repoName, baseBranch } = params;
 
+    // Validate required repo fields
+    if (!repoOwner?.trim() || !repoName?.trim()) {
+      throw new Error('VALIDATION_ERROR: repoOwner and repoName are required');
+    }
+
     const workflow = await this.prisma.workflow.create({
       data: {
         state: 'INGESTED',
