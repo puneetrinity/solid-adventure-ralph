@@ -1,5 +1,5 @@
 import { Inject } from '@nestjs/common';
-import { Processor, Process } from '@nestjs/bullmq';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Job, Queue } from 'bullmq';
 import { getPrisma } from '@db';
@@ -7,18 +7,19 @@ import { WriteGate, type GitHubClient } from '@core';
 import { RunRecorder } from '@core/audit/run-recorder';
 import { StubGitHubClient } from '../github.stub';
 
-@Processor('workflow')
-export class ApplyPatchesProcessor {
+@Processor('apply_patches')
+export class ApplyPatchesProcessor extends WorkerHost {
   private prisma = getPrisma();
   private runRecorder = new RunRecorder(this.prisma);
 
   constructor(
     @Inject(StubGitHubClient) private readonly github: GitHubClient,
     @InjectQueue('workflow') private readonly workflowQueue: Queue
-  ) {}
+  ) {
+    super();
+  }
 
-  @Process('apply_patches')
-  async handle(job: Job<{ workflowId: string; patchSetId: string }>) {
+  async process(job: Job<{ workflowId: string; patchSetId: string }>) {
     const { workflowId, patchSetId } = job.data;
 
     // Record run start

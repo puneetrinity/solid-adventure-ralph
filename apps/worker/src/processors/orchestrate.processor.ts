@@ -1,4 +1,4 @@
-import { Processor, Process } from '@nestjs/bullmq';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { getPrisma } from '@db';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
@@ -10,15 +10,16 @@ export type OrchestrateJobPayload = {
   event: TransitionEvent;
 };
 
-@Processor('workflow')
-export class OrchestrateProcessor {
+@Processor('orchestrate')
+export class OrchestrateProcessor extends WorkerHost {
   private prisma = getPrisma();
   private runRecorder = new RunRecorder(this.prisma);
 
-  constructor(private readonly orchestrator: OrchestratorService) {}
+  constructor(private readonly orchestrator: OrchestratorService) {
+    super();
+  }
 
-  @Process('orchestrate')
-  async handle(job: Job<OrchestrateJobPayload>) {
+  async process(job: Job<OrchestrateJobPayload>) {
     const { workflowId, event } = job.data;
 
     // Record run start

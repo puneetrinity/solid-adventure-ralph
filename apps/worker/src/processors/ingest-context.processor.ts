@@ -1,19 +1,20 @@
-import { Processor, Process } from '@nestjs/bullmq';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Job, Queue } from 'bullmq';
 import { getPrisma } from '@db';
 import { createHash } from 'crypto';
 import { RunRecorder } from '@core/audit/run-recorder';
 
-@Processor('workflow')
-export class IngestContextProcessor {
+@Processor('ingest_context')
+export class IngestContextProcessor extends WorkerHost {
   private prisma = getPrisma();
   private runRecorder = new RunRecorder(this.prisma);
 
-  constructor(@InjectQueue('workflow') private readonly workflowQueue: Queue) {}
+  constructor(@InjectQueue('workflow') private readonly workflowQueue: Queue) {
+    super();
+  }
 
-  @Process('ingest_context')
-  async handle(job: Job<{ workflowId: string }>) {
+  async process(job: Job<{ workflowId: string }>) {
     const { workflowId } = job.data;
 
     // Record run start
