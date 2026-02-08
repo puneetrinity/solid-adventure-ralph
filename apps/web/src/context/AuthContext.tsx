@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import { api, ApiClientError } from '../api/client';
+import { api, ApiClientError, clearAuthToken } from '../api/client';
 
 interface User {
   id: string;
@@ -30,6 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(userData);
     } catch (error) {
       if (error instanceof ApiClientError && error.status === 401) {
+        clearAuthToken();
         setUser(null);
       } else {
         console.error('Auth check failed:', error);
@@ -54,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Logout failed:', error);
     }
+    clearAuthToken();
     setUser(null);
   }, []);
 

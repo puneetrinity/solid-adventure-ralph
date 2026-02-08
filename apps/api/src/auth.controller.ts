@@ -31,6 +31,14 @@ interface GitHubUserResponse {
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
+  private extractToken(req: Request): string | undefined {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      return authHeader.slice('Bearer '.length).trim();
+    }
+    return req.cookies?.auth_token;
+  }
+
   @Get('github')
   @ApiOperation({ summary: 'GitHub OAuth redirect', description: 'Redirects to GitHub for OAuth authentication' })
   @ApiResponse({ status: 302, description: 'Redirect to GitHub' })
@@ -170,6 +178,8 @@ export class AuthController {
 
     return {
       ok: true,
+      // Return token so the frontend can fall back to header auth when cookies are blocked
+      token,
       user: {
         id: userData.id.toString(),
         username: userData.login,
@@ -184,7 +194,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Current user', type: UserResponseDto })
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   getMe(@Req() req: Request) {
-    const token = req.cookies?.auth_token;
+    const token = this.extractToken(req);
     if (!token) {
       this.logger.warn(`Auth token missing (origin=${req.headers.origin ?? 'n/a'}, host=${req.headers.host ?? 'n/a'})`);
       throw new HttpException(

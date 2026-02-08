@@ -20,6 +20,9 @@ export class AuthCallbackResponseDto {
 
   @ApiProperty({ type: UserResponseDto })
   user!: UserResponseDto;
+
+  @ApiPropertyOptional({ example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' })
+  token?: string;
 }
 
 export class LogoutResponseDto {

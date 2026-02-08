@@ -2,6 +2,22 @@ import type { Workflow, PatchSet, Patch, PaginatedResponse, ApiError } from '../
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
+const AUTH_TOKEN_KEY = 'auth_token';
+
+function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+export function setAuthToken(token: string) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+export function clearAuthToken() {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(AUTH_TOKEN_KEY);
+}
 
 class ApiClientError extends Error {
   errorCode: string;
@@ -24,11 +40,17 @@ async function fetchJson<T>(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
+    const token = getAuthToken();
+    const hasAuthHeader =
+      options.headers instanceof Headers
+        ? options.headers.has('Authorization')
+        : !!(options.headers && Object.prototype.hasOwnProperty.call(options.headers, 'Authorization'));
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
+        ...(token && !hasAuthHeader ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers,
       },
       credentials: 'include',
@@ -141,6 +163,7 @@ export const api = {
     callback: (code: string) =>
       fetchJson<{
         ok: boolean;
+        token?: string;
         user: {
           id: string;
           username: string;

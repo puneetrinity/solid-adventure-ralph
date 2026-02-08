@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { RefreshCw, AlertCircle } from 'lucide-react';
-import { api } from '../api/client';
+import { api, setAuthToken } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
 export function AuthCallbackPage() {
@@ -26,7 +26,10 @@ export function AuthCallbackPage() {
 
     async function handleCallback() {
       try {
-        await api.auth.callback(code!);
+        const result = await api.auth.callback(code!);
+        if (result.token) {
+          setAuthToken(result.token);
+        }
         await checkAuth();
         navigate('/workflows', { replace: true });
       } catch (err) {

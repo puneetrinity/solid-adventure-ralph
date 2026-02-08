@@ -19,7 +19,11 @@ export interface AuthenticatedRequest extends Request {
 export class AuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
-    const token = request.cookies?.auth_token;
+    const authHeader = request.headers.authorization;
+    const token =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length).trim()
+        : request.cookies?.auth_token;
 
     if (!token) {
       throw new HttpException(
