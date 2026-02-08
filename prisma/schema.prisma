@@ -12,13 +12,22 @@ model Workflow {
   id         String   @id @default(uuid())
   state      String
   title      String?
+
+  // Goal and context for LLM
+  goal       String?  // Plain English request or ticket text (required in UI)
+  context    String?  // Extra info, links, acceptance criteria
+  feedback   String?  // Latest feedback from Request Changes
+
+  // Legacy single-repo fields (deprecated, use WorkflowRepo)
   repoOwner  String?
   repoName   String?
   baseBranch String   @default("main")
   baseSha    String?
+
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  repos            WorkflowRepo[]
   events           WorkflowEvent[]
   artifacts        Artifact[]
   approvals        Approval[]
@@ -27,6 +36,23 @@ model Workflow {
   runs             WorkflowRun[]
   policyViolations PolicyViolation[]
   checkpoints      Checkpoint[]
+}
+
+model WorkflowRepo {
+  id         String   @id @default(uuid())
+  workflowId String
+  owner      String
+  repo       String
+  baseBranch String   @default("main")
+  baseSha    String?
+  role       String   @default("primary") // primary | secondary
+  createdAt  DateTime @default(now())
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, owner, repo])
+  @@index([workflowId])
+  @@index([owner, repo])
 }
 
 model WorkflowEvent {
@@ -76,11 +102,17 @@ model PatchSet {
   approvedAt DateTime?
   approvedBy String?
 
+  // Multi-repo support: optional repo scope
+  repoOwner  String?
+  repoName   String?
+
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   patches    Patch[]
+  policyViolations PolicyViolation[]
 
   @@index([workflowId, createdAt])
   @@index([workflowId, status])
+  @@index([repoOwner, repoName])
 }
 
 model Patch {
@@ -96,9 +128,14 @@ model Patch {
   proposedCommands Json // array of strings
   createdAt   DateTime @default(now())
 
+  // Multi-repo support: which repo this patch applies to
+  repoOwner   String?
+  repoName    String?
+
   patchSet    PatchSet @relation(fields: [patchSetId], references: [id], onDelete: Cascade)
 
   @@index([patchSetId, createdAt])
+  @@index([repoOwner, repoName])
 }
 
 model PullRequest {
@@ -110,9 +147,15 @@ model PullRequest {
   status     String   // open|merged|closed
   createdAt  DateTime @default(now())
 
+  // Multi-repo support: which repo this PR belongs to
+  repoOwner  String?
+  repoName   String?
+
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 
   @@index([workflowId, createdAt])
+  @@index([repoOwner, repoName])
+  @@index([number])
 }
 
 model WorkflowRun {
@@ -156,11 +199,17 @@ model PolicyViolation {
   evidence    String?  // optional snippet/pattern that matched
   createdAt   DateTime @default(now())
 
+  // Multi-repo support
+  repoOwner   String?
+  repoName    String?
+
   workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  patchSet    PatchSet? @relation(fields: [patchSetId], references: [id], onDelete: Cascade)
 
   @@index([workflowId, createdAt])
   @@index([workflowId, severity])
   @@index([patchSetId])
+  @@index([repoOwner, repoName])
 }
 
 model GitHubWebhook {

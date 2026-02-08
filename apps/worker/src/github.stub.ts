@@ -11,7 +11,9 @@ import type {
   CreateBranchParams,
   CreateBranchResult,
   UpdateFileParams,
-  UpdateFileResult
+  UpdateFileResult,
+  DeleteFileParams,
+  DeleteFileResult
 } from '@arch-orchestrator/core';
 
 export class StubGitHubClient implements GitHubClient {
@@ -55,6 +57,12 @@ export class StubGitHubClient implements GitHubClient {
       path: 'README.md',
       sha: 'stub-sha',
       commitSha: 'stub-commit-sha'
+    };
+  }
+
+  async deleteFile(_params: DeleteFileParams): Promise<DeleteFileResult> {
+    return {
+      commitSha: 'stub-delete-commit-sha'
     };
   }
 

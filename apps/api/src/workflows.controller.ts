@@ -42,7 +42,10 @@ export class WorkflowsController {
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   async createWorkflow(@Body() body: CreateWorkflowDto) {
     return this.workflows.create({
+      goal: body?.goal,
+      context: body?.context,
       title: body?.title,
+      repos: body?.repos,
       repoOwner: body?.repoOwner,
       repoName: body?.repoName,
       baseBranch: body?.baseBranch,

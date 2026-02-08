@@ -2,11 +2,21 @@ import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+
+  // Capture raw body for webhook signature verification
+  const rawBodySaver = (req: any, _res: any, buf: Buffer) => {
+    if (buf?.length) {
+      req.rawBody = buf;
+    }
+  };
+  app.use(bodyParser.json({ verify: rawBodySaver }));
+  app.use(bodyParser.urlencoded({ verify: rawBodySaver, extended: true }));
 
   // Cookie parsing for auth
   app.use(cookieParser());

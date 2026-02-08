@@ -72,33 +72,81 @@ export class WorkflowsService {
     return { items, nextCursor };
   }
 
-  async create(params: { title?: string; repoOwner?: string; repoName?: string; baseBranch?: string }) {
-    const { title, repoOwner, repoName, baseBranch } = params;
+  async create(params: {
+    goal: string;
+    context?: string;
+    title?: string;
+    repos?: Array<{ owner: string; repo: string; baseBranch?: string; role?: string }>;
+    repoOwner?: string;
+    repoName?: string;
+    baseBranch?: string;
+  }) {
+    const { goal, context, title, repos, repoOwner, repoName, baseBranch } = params;
 
-    // Validate required repo fields
-    if (!repoOwner?.trim() || !repoName?.trim()) {
-      throw new BadRequestException('repoOwner and repoName are required');
+    // Validate goal is provided
+    if (!goal?.trim()) {
+      throw new BadRequestException('goal is required');
     }
+
+    // Handle repos array or legacy single-repo fields
+    let repoList = repos || [];
+    if (repoList.length === 0 && repoOwner && repoName) {
+      // Legacy mode: single repo
+      repoList = [{ owner: repoOwner, repo: repoName, baseBranch: baseBranch || 'main', role: 'primary' }];
+    }
+
+    // Validate at least one repo
+    if (repoList.length === 0) {
+      throw new BadRequestException('At least one repository is required (use repos array or repoOwner/repoName)');
+    }
+
+    // Validate exactly one primary repo
+    const primaryRepos = repoList.filter(r => (r.role || 'primary') === 'primary');
+    if (primaryRepos.length === 0) {
+      // Default first repo to primary
+      repoList[0].role = 'primary';
+    } else if (primaryRepos.length > 1) {
+      throw new BadRequestException('Exactly one repository must have role "primary"');
+    }
+
+    // Use primary repo for legacy fields
+    const primaryRepo = repoList.find(r => r.role === 'primary') || repoList[0];
 
     const workflow = await this.prisma.workflow.create({
       data: {
         state: 'INGESTED',
-        title: title || null,
-        repoOwner: repoOwner || null,
-        repoName: repoName || null,
-        baseBranch: baseBranch || 'main',
+        goal: goal,
+        context: context || null,
+        title: title || goal.substring(0, 100),
+        // Legacy fields for backwards compat
+        repoOwner: primaryRepo.owner,
+        repoName: primaryRepo.repo,
+        baseBranch: primaryRepo.baseBranch || 'main',
       }
     });
+
+    // Create WorkflowRepo entries
+    for (const repo of repoList) {
+      await this.prisma.workflowRepo.create({
+        data: {
+          workflowId: workflow.id,
+          owner: repo.owner,
+          repo: repo.repo,
+          baseBranch: repo.baseBranch || 'main',
+          role: repo.role || 'primary',
+        }
+      });
+    }
 
     await this.prisma.workflowEvent.create({
       data: {
         workflowId: workflow.id,
         type: 'ui.create',
-        payload: { title, repoOwner, repoName, baseBranch }
+        payload: { goal, context, title, repos: repoList }
       }
     });
 
-    // REFACTORED: Emit event to orchestrator instead of directly enqueueing ingest_context
+    // Emit event to orchestrator
     await this.orchestrateQueue.add('orchestrate', {
       workflowId: workflow.id,
       event: { type: 'E_WORKFLOW_CREATED' }
@@ -107,10 +155,13 @@ export class WorkflowsService {
     return {
       id: workflow.id,
       state: workflow.state,
+      goal: workflow.goal,
+      context: workflow.context,
       title: workflow.title,
       repoOwner: workflow.repoOwner,
       repoName: workflow.repoName,
       baseBranch: workflow.baseBranch,
+      repos: repoList,
     };
   }
 
@@ -118,6 +169,7 @@ export class WorkflowsService {
     const workflow = await this.prisma.workflow.findUnique({
       where: { id },
       include: {
+        repos: { orderBy: { createdAt: 'asc' } },
         events: { orderBy: { createdAt: 'asc' } },
         artifacts: { orderBy: { createdAt: 'asc' } },
         patchSets: {
@@ -188,6 +240,12 @@ export class WorkflowsService {
     if (!patchSet) {
       return { ok: false, error: 'NO_PATCH_SET_FOUND' };
     }
+
+    // Store feedback in workflow for LLM to use on next iteration
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: { feedback: comment }
+    });
 
     // Record event for request changes
     await this.prisma.workflowEvent.create({
