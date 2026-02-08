@@ -11,7 +11,7 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // Groq pricing (approximate, in cents per 1M tokens)
 const GROQ_PRICING: Record<string, { input: number; output: number }> = {
-  'llama-3.1-70b-versatile': { input: 59, output: 79 },
+  'llama-3.3-70b-versatile': { input: 59, output: 79 },
   'llama-3.1-8b-instant': { input: 5, output: 8 },
   'llama3-70b-8192': { input: 59, output: 79 },
   'llama3-8b-8192': { input: 5, output: 8 },
@@ -47,7 +47,7 @@ export class GroqLLMProvider implements LLMProvider {
 
   constructor(config: { apiKey: string; modelId?: string; timeout?: number }) {
     this.apiKey = config.apiKey;
-    this.modelId = config.modelId ?? 'llama-3.1-70b-versatile';
+    this.modelId = config.modelId ?? 'llama-3.3-70b-versatile';
     this.timeout = config.timeout ?? 60000;
   }
 
@@ -155,6 +155,6 @@ export function createGroqProvider(): GroqLLMProvider | null {
 
   return new GroqLLMProvider({
     apiKey,
-    modelId: process.env.GROQ_MODEL_ID ?? 'llama-3.1-70b-versatile',
+    modelId: process.env.GROQ_MODEL_ID ?? 'llama-3.3-70b-versatile',
   });
 }
