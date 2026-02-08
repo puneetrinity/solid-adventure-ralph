@@ -31,4 +31,8 @@ RUN npm run build -w packages/db -w packages/core -w apps/worker
 # Generate Prisma client
 RUN npx prisma generate
 
-CMD ["npm", "run", "start:worker"]
+# Copy start script
+COPY start-worker.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
