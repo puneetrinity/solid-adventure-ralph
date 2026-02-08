@@ -154,10 +154,12 @@ export class AuthController {
     );
 
     // Set cookie
+    const isProduction = process.env.NODE_ENV === 'production';
     res.cookie('auth_token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: isProduction,
+      // Cross-site requests from the web app require SameSite=None in production
+      sameSite: isProduction ? 'none' : 'lax',
       maxAge: COOKIE_MAX_AGE,
     });
 
