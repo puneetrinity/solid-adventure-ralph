@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiParam, ApiCookieAuth } from '@nestjs/swagger';
 import { WorkflowsService } from './workflows.service';
 import { AuthGuard, AuthenticatedRequest } from './auth.guard';
@@ -107,5 +107,32 @@ export class WorkflowsController {
     @Req() req: AuthenticatedRequest
   ) {
     return this.workflows.reject(id, body?.patchSetId, body.reason, req.user.username);
+  }
+
+  @Post(':id/actions/cancel')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Cancel workflow', description: 'Cancel an in-progress workflow' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiResponse({ status: 200, description: 'Cancellation successful', type: ApprovalResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async cancel(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.workflows.cancel(id, req.user.username);
+  }
+
+  @Delete(':id')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Delete workflow', description: 'Permanently delete a workflow and all related data' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiResponse({ status: 200, description: 'Deletion successful', type: ApprovalResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async delete(@Param('id') id: string) {
+    return this.workflows.delete(id);
   }
 }

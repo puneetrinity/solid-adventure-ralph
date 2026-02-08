@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   RefreshCw,
@@ -22,6 +22,8 @@ import {
   Layers,
   FileCode,
   Package,
+  Trash2,
+  Ban,
 } from 'lucide-react';
 import { useWorkflow } from '../hooks/use-workflow';
 import { WorkflowStatusBadge } from '../components/workflow';
@@ -31,8 +33,42 @@ import type { Workflow, WorkflowEvent, Artifact, PatchSet, Patch, PolicyViolatio
 
 export function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { workflow, isLoading, error, refetch, isPolling, lastUpdated } = useWorkflow(id!);
   const [activeTab, setActiveTab] = useState<'overview' | 'architecture' | 'timeline' | 'artifacts' | 'policy' | 'patches' | 'runs'>('overview');
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const canCancel = workflow && ['INGESTED', 'PATCHES_PROPOSED', 'WAITING_USER_APPROVAL', 'APPLYING_PATCHES', 'PR_OPEN', 'VERIFYING_CI'].includes(workflow.state);
+
+  const handleCancel = async () => {
+    if (!workflow) return;
+    setActionLoading(true);
+    try {
+      await api.workflows.cancel(workflow.id);
+      setShowCancelModal(false);
+      await refetch();
+    } catch (err) {
+      console.error('Failed to cancel workflow:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!workflow) return;
+    setActionLoading(true);
+    try {
+      await api.workflows.delete(workflow.id);
+      setShowDeleteModal(false);
+      navigate('/workflows');
+    } catch (err) {
+      console.error('Failed to delete workflow:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
@@ -129,8 +165,85 @@ export function WorkflowDetailPage() {
             <RefreshCw className="h-4 w-4" />
             Refresh
           </button>
+          {canCancel && (
+            <button
+              onClick={() => setShowCancelModal(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-white border border-yellow-300 text-yellow-700 rounded-md hover:bg-yellow-50"
+            >
+              <Ban className="h-4 w-4" />
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={() => setShowDeleteModal(true)}
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-white border border-red-300 text-red-700 rounded-md hover:bg-red-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
         </div>
       </div>
+
+      {/* Cancel Modal */}
+      <Modal
+        isOpen={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        title="Cancel Workflow"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Are you sure you want to cancel this workflow? This will stop all in-progress operations.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setShowCancelModal(false)}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-md hover:bg-gray-50"
+            >
+              Keep Running
+            </button>
+            <button
+              onClick={handleCancel}
+              disabled={actionLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50"
+            >
+              {actionLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+              Cancel Workflow
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Modal */}
+      <Modal
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        title="Delete Workflow"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Are you sure you want to permanently delete this workflow? This action cannot be undone.
+          </p>
+          <p className="text-sm text-red-600 font-medium">
+            All events, artifacts, patches, and related data will be deleted.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setShowDeleteModal(false)}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-md hover:bg-gray-50"
+            >
+              Keep Workflow
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={actionLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
+            >
+              {actionLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              Delete Permanently
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Approval banner when waiting */}
       {workflow.state === 'WAITING_USER_APPROVAL' && (

@@ -9,7 +9,8 @@ export type WorkflowState =
   | 'DONE'
   | 'BLOCKED_POLICY'
   | 'NEEDS_HUMAN'
-  | 'FAILED';
+  | 'FAILED'
+  | 'CANCELLED';
 
 export interface PullRequest {
   id: string;

@@ -153,6 +153,16 @@ export const api = {
         body: JSON.stringify({ patchSetId, comment }),
       }),
 
+    cancel: (id: string) =>
+      fetchJson<{ ok: boolean; workflowId: string }>(`/api/workflows/${id}/actions/cancel`, {
+        method: 'POST',
+      }),
+
+    delete: (id: string) =>
+      fetchJson<{ ok: boolean; workflowId: string }>(`/api/workflows/${id}`, {
+        method: 'DELETE',
+      }),
+
     getPatchSets: (id: string) =>
       fetchJson<PatchSet[]>(`/api/workflows/${id}/patch_sets`),
 

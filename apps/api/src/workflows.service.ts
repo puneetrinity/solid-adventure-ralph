@@ -303,4 +303,67 @@ export class WorkflowsService {
 
     return { ok: true, workflowId, patchSetId: patchSet.id };
   }
+
+  async cancel(workflowId: string, cancelledBy: string = 'user') {
+    const workflow = await this.prisma.workflow.findUnique({
+      where: { id: workflowId }
+    });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND' };
+    }
+
+    // Only allow cancelling workflows that are in-progress
+    const cancellableStates = ['INGESTED', 'PATCHES_PROPOSED', 'WAITING_USER_APPROVAL', 'APPLYING_PATCHES', 'PR_OPEN', 'VERIFYING_CI'];
+    if (!cancellableStates.includes(workflow.state)) {
+      return { ok: false, error: 'WORKFLOW_NOT_CANCELLABLE', state: workflow.state };
+    }
+
+    // Update workflow state to CANCELLED
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: { state: 'CANCELLED' }
+    });
+
+    // Record event
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: 'ui.cancel',
+        payload: { cancelledBy, previousState: workflow.state }
+      }
+    });
+
+    return { ok: true, workflowId };
+  }
+
+  async delete(workflowId: string) {
+    const workflow = await this.prisma.workflow.findUnique({
+      where: { id: workflowId }
+    });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND' };
+    }
+
+    // Delete in order to respect foreign key constraints
+    await this.prisma.workflowEvent.deleteMany({ where: { workflowId } });
+    await this.prisma.approval.deleteMany({ where: { workflowId } });
+    await this.prisma.policyViolation.deleteMany({ where: { workflowId } });
+    await this.prisma.workflowRun.deleteMany({ where: { workflowId } });
+    await this.prisma.artifact.deleteMany({ where: { workflowId } });
+    await this.prisma.pullRequest.deleteMany({ where: { workflowId } });
+
+    // Delete patches first, then patch sets
+    const patchSets = await this.prisma.patchSet.findMany({ where: { workflowId } });
+    for (const ps of patchSets) {
+      await this.prisma.patch.deleteMany({ where: { patchSetId: ps.id } });
+    }
+    await this.prisma.patchSet.deleteMany({ where: { workflowId } });
+
+    await this.prisma.workflowRepo.deleteMany({ where: { workflowId } });
+    await this.prisma.workflow.delete({ where: { id: workflowId } });
+
+    return { ok: true, workflowId };
+  }
 }
