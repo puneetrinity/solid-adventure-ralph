@@ -17,8 +17,9 @@ import type {
 export class StubGitHubClient implements GitHubClient {
   async getRepository(_params: GetRepositoryParams): Promise<RepositoryInfo> {
     return {
-      owner: 'stub-owner',
-      repo: 'stub-repo',
+      id: 1,
+      name: 'stub-repo',
+      fullName: 'stub-owner/stub-repo',
       defaultBranch: 'main',
       private: false
     };
@@ -26,28 +27,31 @@ export class StubGitHubClient implements GitHubClient {
 
   async getFileContents(_params: GetFileContentsParams): Promise<FileContents> {
     return {
+      path: 'README.md',
       content: '',
       sha: 'stub-sha',
-      encoding: 'utf-8'
+      size: 0
     };
   }
 
   async getBranch(_params: GetBranchParams): Promise<BranchInfo> {
     return {
       name: 'main',
-      sha: 'stub-sha'
+      sha: 'stub-sha',
+      protected: false
     };
   }
 
   async createBranch(_params: CreateBranchParams): Promise<CreateBranchResult> {
     return {
-      name: 'stub-branch',
+      ref: 'refs/heads/stub-branch',
       sha: 'stub-sha'
     };
   }
 
   async updateFile(_params: UpdateFileParams): Promise<UpdateFileResult> {
     return {
+      path: 'README.md',
       sha: 'stub-sha',
       commitSha: 'stub-commit-sha'
     };
