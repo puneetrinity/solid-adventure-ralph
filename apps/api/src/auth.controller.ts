@@ -162,6 +162,11 @@ export class AuthController {
       sameSite: isProduction ? 'none' : 'lax',
       maxAge: COOKIE_MAX_AGE,
     });
+    this.logger.log(
+      `Set auth cookie (origin=${res.req?.headers?.origin ?? 'n/a'}, host=${res.req?.headers?.host ?? 'n/a'}, setCookie=${JSON.stringify(
+        res.getHeader('Set-Cookie')
+      )})`
+    );
 
     return {
       ok: true,
