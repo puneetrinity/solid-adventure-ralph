@@ -7,8 +7,7 @@ import { OrchestrateProcessor } from './processors/orchestrate.processor';
 import { OrchestratorService } from './orchestrator/orchestrator.service';
 import { StubGitHubClient, type GitHubClient } from '@arch-orchestrator/core';
 import { Octokit } from '@octokit/rest';
-
-const GITHUB_CLIENT_TOKEN = 'GITHUB_CLIENT';
+import { GITHUB_CLIENT_TOKEN } from './constants';
 
 // Simple inline implementation to avoid ESM import issues
 class TokenGitHubClient implements GitHubClient {
@@ -125,5 +124,3 @@ function createGitHubClient(): GitHubClient {
   exports: [GITHUB_CLIENT_TOKEN]
 })
 export class WorkerModule {}
-
-export { GITHUB_CLIENT_TOKEN };

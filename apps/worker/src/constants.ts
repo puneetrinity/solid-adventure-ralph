@@ -1,0 +1,1 @@
+export const GITHUB_CLIENT_TOKEN = 'GITHUB_CLIENT';

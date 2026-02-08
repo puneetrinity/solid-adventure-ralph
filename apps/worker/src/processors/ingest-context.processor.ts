@@ -11,7 +11,7 @@ import {
   GroqLLMProvider,
   createGroqProvider,
 } from '@arch-orchestrator/core';
-import { GITHUB_CLIENT_TOKEN } from '../worker.module';
+import { GITHUB_CLIENT_TOKEN } from '../constants';
 
 @Processor('ingest_context')
 export class IngestContextProcessor extends WorkerHost {

@@ -4,7 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import type { Job, Queue } from 'bullmq';
 import { getPrisma } from '@arch-orchestrator/db';
 import { WriteGate, RunRecorder, type GitHubClient } from '@arch-orchestrator/core';
-import { GITHUB_CLIENT_TOKEN } from '../worker.module';
+import { GITHUB_CLIENT_TOKEN } from '../constants';
 
 @Processor('apply_patches')
 export class ApplyPatchesProcessor extends WorkerHost {
