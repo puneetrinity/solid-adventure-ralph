@@ -1,0 +1,7 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile.worker"
+
+[deploy]
+# Worker has no health check endpoint
+restartPolicyType = "on_failure"
