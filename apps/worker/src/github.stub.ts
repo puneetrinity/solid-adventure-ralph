@@ -12,7 +12,7 @@ import type {
   CreateBranchResult,
   UpdateFileParams,
   UpdateFileResult
-} from '@core';
+} from '@arch-orchestrator/core';
 
 export class StubGitHubClient implements GitHubClient {
   async getRepository(_params: GetRepositoryParams): Promise<RepositoryInfo> {

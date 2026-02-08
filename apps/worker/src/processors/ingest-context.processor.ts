@@ -1,9 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Job, Queue } from 'bullmq';
-import { getPrisma } from '@db';
+import { getPrisma } from '@arch-orchestrator/db';
 import { createHash } from 'crypto';
-import { RunRecorder } from '@core/audit/run-recorder';
+import { RunRecorder } from '@arch-orchestrator/core/audit/run-recorder';
 
 @Processor('ingest_context')
 export class IngestContextProcessor extends WorkerHost {

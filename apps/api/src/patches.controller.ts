@@ -1,6 +1,6 @@
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
-import { getPrisma } from '@db';
+import { getPrisma } from '@arch-orchestrator/db';
 import { PatchResponseDto, ErrorResponseDto } from './dto';
 
 @ApiTags('patches')

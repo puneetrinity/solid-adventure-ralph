@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
-import { getPrisma } from '@db';
-import { transition, TransitionContext } from '@core/workflow/transition';
-import type { WorkflowState, TransitionEvent, EnqueueJob } from '@core/workflow/states';
+import { getPrisma } from '@arch-orchestrator/db';
+import { transition, TransitionContext } from '@arch-orchestrator/core/workflow/transition';
+import type { WorkflowState, TransitionEvent, EnqueueJob } from '@arch-orchestrator/core/workflow/states';
 import { loadTransitionContext } from './context-loader';
 import { writeTransitionResult } from './state-writer';
 

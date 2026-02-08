@@ -13,10 +13,10 @@
     "emitDecoratorMetadata": true,
     "baseUrl": ".",
     "paths": {
-      "@core": ["packages/core/dist/index"],
-      "@core/*": ["packages/core/dist/*"],
-      "@db": ["packages/db/dist/index"],
-      "@db/*": ["packages/db/dist/*"]
+      "@arch-orchestrator/core": ["packages/core/dist/index"],
+      "@arch-orchestrator/core/*": ["packages/core/dist/*"],
+      "@arch-orchestrator/db": ["packages/db/dist/index"],
+      "@arch-orchestrator/db/*": ["packages/db/dist/*"]
     }
   }
 }

@@ -1,9 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
-import { getPrisma } from '@db';
+import { getPrisma } from '@arch-orchestrator/db';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
-import { RunRecorder } from '@core/audit/run-recorder';
-import type { TransitionEvent } from '@core/workflow/states';
+import { RunRecorder } from '@arch-orchestrator/core/audit/run-recorder';
+import type { TransitionEvent } from '@arch-orchestrator/core/workflow/states';
 
 export type OrchestrateJobPayload = {
   workflowId: string;
