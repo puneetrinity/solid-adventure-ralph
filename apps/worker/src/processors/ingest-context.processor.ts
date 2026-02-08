@@ -113,7 +113,9 @@ Generate a small improvement to this README. Respond with ONLY a JSON object in 
   "newContent": "The complete new README.md content"
 }`;
 
-        const response = await llmRunner.run('coder', prompt);
+        const response = await llmRunner.run('coder', prompt, {
+          context: { workflowId }
+        });
 
         if (response.success && response.rawContent) {
           try {

@@ -49,10 +49,9 @@ export class WorkflowsController {
         baseBranch: body?.baseBranch,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.startsWith('VALIDATION_ERROR:')) {
+      if (err instanceof Error && err.name === 'BadRequestException') {
         throw new HttpException(
-          { errorCode: 'VALIDATION_ERROR', message: message.replace('VALIDATION_ERROR: ', '') },
+          { errorCode: 'VALIDATION_ERROR', message: err.message },
           HttpStatus.BAD_REQUEST
         );
       }

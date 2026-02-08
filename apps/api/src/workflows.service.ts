@@ -77,7 +77,9 @@ export class WorkflowsService {
 
     // Validate required repo fields
     if (!repoOwner?.trim() || !repoName?.trim()) {
-      throw new Error('VALIDATION_ERROR: repoOwner and repoName are required');
+      const error = new Error('repoOwner and repoName are required');
+      error.name = 'BadRequestException';
+      throw error;
     }
 
     const workflow = await this.prisma.workflow.create({
