@@ -1,8 +1,11 @@
 # Worker Dockerfile
-FROM node:20-alpine
+FROM node:20-bullseye-slim
 
-# Install bash + OpenSSL 1.1 compatibility (Prisma on Alpine) - bust cache 20260208v2
-RUN apk add --no-cache bash openssl1.1-compat && echo "cache-bust-20260208v2"
+# Install bash + OpenSSL (Prisma on Debian) - bust cache 20260208v3
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && echo "cache-bust-20260208v3"
 
 WORKDIR /app
 
