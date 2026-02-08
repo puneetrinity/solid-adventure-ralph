@@ -12,6 +12,10 @@ interface ListParams {
 interface WorkflowListItem {
   id: string;
   state: string;
+  title: string | null;
+  repoOwner: string | null;
+  repoName: string | null;
+  baseBranch: string;
   createdAt: Date;
   baseSha: string | null;
 }
@@ -47,6 +51,10 @@ export class WorkflowsService {
       select: {
         id: true,
         state: true,
+        title: true,
+        repoOwner: true,
+        repoName: true,
+        baseBranch: true,
         createdAt: true,
         baseSha: true,
       },
@@ -61,16 +69,24 @@ export class WorkflowsService {
     return { items, nextCursor };
   }
 
-  async create(title: string) {
+  async create(params: { title?: string; repoOwner?: string; repoName?: string; baseBranch?: string }) {
+    const { title, repoOwner, repoName, baseBranch } = params;
+
     const workflow = await this.prisma.workflow.create({
-      data: { state: 'INGESTED' }
+      data: {
+        state: 'INGESTED',
+        title: title || null,
+        repoOwner: repoOwner || null,
+        repoName: repoName || null,
+        baseBranch: baseBranch || 'main',
+      }
     });
 
     await this.prisma.workflowEvent.create({
       data: {
         workflowId: workflow.id,
         type: 'ui.create',
-        payload: { title }
+        payload: { title, repoOwner, repoName, baseBranch }
       }
     });
 
@@ -80,7 +96,14 @@ export class WorkflowsService {
       event: { type: 'E_WORKFLOW_CREATED' }
     });
 
-    return { id: workflow.id, state: workflow.state };
+    return {
+      id: workflow.id,
+      state: workflow.state,
+      title: workflow.title,
+      repoOwner: workflow.repoOwner,
+      repoName: workflow.repoName,
+      baseBranch: workflow.baseBranch,
+    };
   }
 
   async get(id: string) {

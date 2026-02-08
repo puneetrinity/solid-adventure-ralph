@@ -6,6 +6,25 @@ export class CreateWorkflowDto {
     example: 'Add dark mode feature',
   })
   title?: string;
+
+  @ApiPropertyOptional({
+    description: 'GitHub repository owner (user or org)',
+    example: 'puneetrinity',
+  })
+  repoOwner?: string;
+
+  @ApiPropertyOptional({
+    description: 'GitHub repository name',
+    example: 'arch-orchestrator-sandbox',
+  })
+  repoName?: string;
+
+  @ApiPropertyOptional({
+    description: 'Base branch to work from',
+    example: 'main',
+    default: 'main',
+  })
+  baseBranch?: string;
 }
 
 export class ApproveWorkflowDto {
@@ -50,6 +69,18 @@ export class WorkflowResponseDto {
 
   @ApiProperty({ example: 'INGESTED' })
   state!: string;
+
+  @ApiPropertyOptional({ example: 'Add dark mode feature' })
+  title?: string;
+
+  @ApiPropertyOptional({ example: 'puneetrinity' })
+  repoOwner?: string;
+
+  @ApiPropertyOptional({ example: 'arch-orchestrator-sandbox' })
+  repoName?: string;
+
+  @ApiProperty({ example: 'main' })
+  baseBranch!: string;
 
   @ApiProperty({ example: '2026-02-07T10:00:00.000Z' })
   createdAt!: string;

@@ -5,3 +5,4 @@ export * from './runner';
 export * from './artifact-generator';
 export * from './patch-generator';
 export * from './cost-tracker';
+export * from './groq-provider';

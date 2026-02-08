@@ -11,6 +11,9 @@ export function WorkflowsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createTitle, setCreateTitle] = useState('');
+  const [createRepoOwner, setCreateRepoOwner] = useState('puneetrinity');
+  const [createRepoName, setCreateRepoName] = useState('arch-orchestrator-sandbox');
+  const [createBaseBranch, setCreateBaseBranch] = useState('main');
   const [isCreating, setIsCreating] = useState(false);
   const { workflows, isLoading, error, nextCursor, refetch, loadMore } = useWorkflows({
     status: statusFilter || undefined,
@@ -36,10 +39,23 @@ export function WorkflowsPage() {
 
   const handleCreateWorkflow = async () => {
     if (isCreating) return;
+
+    const repoOwner = createRepoOwner.trim();
+    const repoName = createRepoName.trim();
+
+    if (!repoOwner || !repoName) {
+      showToast('Repository owner and name are required', 'error');
+      return;
+    }
+
     setIsCreating(true);
     try {
-      const title = createTitle.trim();
-      await api.workflows.create(title || undefined);
+      await api.workflows.create({
+        title: createTitle.trim() || undefined,
+        repoOwner,
+        repoName,
+        baseBranch: createBaseBranch.trim() || 'main',
+      });
       showToast('Workflow created', 'success');
       setShowCreateModal(false);
       setCreateTitle('');
@@ -234,6 +250,47 @@ export function WorkflowsPage() {
               value={createTitle}
               onChange={e => setCreateTitle(e.target.value)}
               placeholder="E.g., Update README"
+              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
+              disabled={isCreating}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Repo Owner *
+              </label>
+              <input
+                type="text"
+                value={createRepoOwner}
+                onChange={e => setCreateRepoOwner(e.target.value)}
+                placeholder="puneetrinity"
+                className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
+                disabled={isCreating}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Repo Name *
+              </label>
+              <input
+                type="text"
+                value={createRepoName}
+                onChange={e => setCreateRepoName(e.target.value)}
+                placeholder="arch-orchestrator-sandbox"
+                className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
+                disabled={isCreating}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Base Branch
+            </label>
+            <input
+              type="text"
+              value={createBaseBranch}
+              onChange={e => setCreateBaseBranch(e.target.value)}
+              placeholder="main"
               className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
               disabled={isCreating}
             />

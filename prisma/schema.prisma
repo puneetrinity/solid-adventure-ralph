@@ -9,11 +9,15 @@ datasource db {
 }
 
 model Workflow {
-  id        String   @id @default(uuid())
-  state     String
-  baseSha   String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid())
+  state      String
+  title      String?
+  repoOwner  String?
+  repoName   String?
+  baseBranch String   @default("main")
+  baseSha    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   events           WorkflowEvent[]
   artifacts        Artifact[]

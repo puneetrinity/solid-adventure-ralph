@@ -24,8 +24,11 @@ export interface PullRequest {
 export interface Workflow {
   id: string;
   state: WorkflowState;
-  baseSha: string;
-  repoFullName: string;
+  title?: string;
+  repoOwner?: string;
+  repoName?: string;
+  baseBranch: string;
+  baseSha?: string;
   createdAt: string;
   updatedAt: string;
   prUrl?: string;

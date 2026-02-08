@@ -1,11 +1,104 @@
-import { Module } from '@nestjs/common';
+import { Module, Logger } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { parseRedisUrl } from './redis';
 import { IngestContextProcessor } from './processors/ingest-context.processor';
 import { ApplyPatchesProcessor } from './processors/apply-patches.processor';
 import { OrchestrateProcessor } from './processors/orchestrate.processor';
 import { OrchestratorService } from './orchestrator/orchestrator.service';
-import { StubGitHubClient } from './github.stub';
+import { StubGitHubClient, type GitHubClient } from '@arch-orchestrator/core';
+import { Octokit } from '@octokit/rest';
+
+const GITHUB_CLIENT_TOKEN = 'GITHUB_CLIENT';
+
+// Simple inline implementation to avoid ESM import issues
+class TokenGitHubClient implements GitHubClient {
+  private readonly octokit: Octokit;
+
+  constructor(token: string) {
+    this.octokit = new Octokit({ auth: token });
+  }
+
+  async getRepository(params: { owner: string; repo: string }) {
+    const { data } = await this.octokit.repos.get(params);
+    return {
+      id: data.id,
+      name: data.name,
+      fullName: data.full_name,
+      defaultBranch: data.default_branch,
+      private: data.private,
+      htmlUrl: data.html_url
+    };
+  }
+
+  async getFileContents(params: { owner: string; repo: string; path: string; ref?: string }) {
+    const { data } = await this.octokit.repos.getContent({
+      owner: params.owner,
+      repo: params.repo,
+      path: params.path,
+      ref: params.ref
+    });
+
+    if (Array.isArray(data) || data.type !== 'file') {
+      throw new Error(`Path "${params.path}" is not a file`);
+    }
+
+    const content = data.content
+      ? Buffer.from(data.content, 'base64').toString('utf-8')
+      : '';
+
+    return { path: data.path, content, sha: data.sha, size: data.size };
+  }
+
+  async getBranch(params: { owner: string; repo: string; branch: string }) {
+    const { data } = await this.octokit.repos.getBranch(params);
+    return { name: data.name, sha: data.commit.sha, protected: data.protected };
+  }
+
+  async createBranch(params: { owner: string; repo: string; branch: string; sha: string }) {
+    const { data } = await this.octokit.git.createRef({
+      owner: params.owner,
+      repo: params.repo,
+      ref: `refs/heads/${params.branch}`,
+      sha: params.sha
+    });
+    return { ref: data.ref, sha: data.object.sha };
+  }
+
+  async updateFile(params: { owner: string; repo: string; path: string; message: string; content: string; sha?: string; branch: string }) {
+    const { data } = await this.octokit.repos.createOrUpdateFileContents({
+      owner: params.owner,
+      repo: params.repo,
+      path: params.path,
+      message: params.message,
+      content: params.content,
+      sha: params.sha,
+      branch: params.branch
+    });
+    return {
+      path: data.content?.path ?? params.path,
+      sha: data.content?.sha ?? '',
+      commitSha: data.commit.sha ?? ''
+    };
+  }
+
+  async openPullRequest(params: { owner: string; repo: string; head: string; base: string; title: string; body?: string }) {
+    const { data } = await this.octokit.pulls.create(params);
+    return { url: data.html_url, number: data.number };
+  }
+}
+
+function createGitHubClient(): GitHubClient {
+  const logger = new Logger('GitHubClientFactory');
+  const token = process.env.GITHUB_TOKEN;
+
+  if (token) {
+    logger.log('Using TokenGitHubClient with PAT authentication');
+    return new TokenGitHubClient(token);
+  }
+
+  logger.warn('GITHUB_TOKEN not set, using StubGitHubClient');
+  return new StubGitHubClient();
+}
 
 @Module({
   imports: [
@@ -23,8 +116,14 @@ import { StubGitHubClient } from './github.stub';
     IngestContextProcessor,
     ApplyPatchesProcessor,
 
-    // GitHub client (stub for now)
-    { provide: StubGitHubClient, useClass: StubGitHubClient }
-  ]
+    // GitHub client - real when GITHUB_TOKEN is set, stub otherwise
+    {
+      provide: GITHUB_CLIENT_TOKEN,
+      useFactory: createGitHubClient
+    }
+  ],
+  exports: [GITHUB_CLIENT_TOKEN]
 })
 export class WorkerModule {}
+
+export { GITHUB_CLIENT_TOKEN };
