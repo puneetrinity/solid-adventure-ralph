@@ -74,7 +74,29 @@ test/
 .ai/            # Spec files (PLAN, STATUS, etc.)
 ```
 
+## After Each Phase/Task
+
+1. Update `.ai/STATUS.json` with completed tasks
+2. Run documentation alignment check:
+   - Compare implementation against `.ai/*.md` specs
+   - Update any misaligned documentation
+   - See `.ai/PROMPTS/doc-alignment-check.md` for details
+3. Ensure all tests pass: `npm test`
+
+## Documentation Alignment
+
+After modifying any of these, update corresponding docs:
+- `prisma/schema.prisma` → Update `.ai/DATA_MODEL.md`
+- `packages/core/src/workflow/states.ts` → Update `.ai/WORKFLOW_STATE_MACHINE.md`
+- `apps/api/src/**/*.controller.ts` → Update `.ai/API_CONTRACT.md`
+- `packages/core/src/policy/*` → Update `.ai/POLICY_ENGINE.md`, `.ai/GATES.md`
+
+Prompts available:
+- `.ai/PROMPTS/doc-alignment-check.md` - Verify alignment
+- `.ai/PROMPTS/fix-doc-alignment.md` - Fix issues
+
 ## Notes
 - Never execute repo code on the server (CI runs in GitHub Actions)
 - All GitHub writes must go through WriteGate
-- Update .ai/STATUS.json after completing tasks
+- Documentation follows code (not the other way around)
+- Future/planned features go in "## Future" sections, not mixed with current

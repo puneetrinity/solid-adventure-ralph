@@ -40,10 +40,25 @@ describe('transition() contract', () => {
   });
 
   describe('PATCHES_PROPOSED state', () => {
-    test('normalizes to WAITING_USER_APPROVAL when patchsets exist', () => {
+    test('enqueues policy evaluation when patchsets exist', () => {
       const ctx = { ...baseCtx(), hasPatchSets: true, latestPatchSetId: 'ps1' };
       const res = transition('PATCHES_PROPOSED', { type: 'E_JOB_COMPLETED', stage: 'ingest_context' }, ctx);
+      expect(res.nextState).toBe('PATCHES_PROPOSED');
+      expect(res.enqueue).toEqual([
+        { queue: 'workflow', name: 'evaluate_policy', payload: { workflowId: 'w1', patchSetId: 'ps1' } }
+      ]);
+    });
+
+    test('moves to WAITING_USER_APPROVAL after policy passes', () => {
+      const ctx = { ...baseCtx(), hasPatchSets: true, latestPatchSetId: 'ps1' };
+      const res = transition('PATCHES_PROPOSED', { type: 'E_POLICY_EVALUATED', result: { hasBlockingViolations: false } }, ctx);
       expect(res.nextState).toBe('WAITING_USER_APPROVAL');
+    });
+
+    test('blocks on policy violations', () => {
+      const ctx = { ...baseCtx(), hasPatchSets: true, latestPatchSetId: 'ps1' };
+      const res = transition('PATCHES_PROPOSED', { type: 'E_POLICY_EVALUATED', result: { hasBlockingViolations: true } }, ctx);
+      expect(res.nextState).toBe('BLOCKED_POLICY');
     });
 
     test('normalizes to NEEDS_HUMAN when no patchsets', () => {

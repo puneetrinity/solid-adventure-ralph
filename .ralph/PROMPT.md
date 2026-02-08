@@ -24,6 +24,12 @@ This is a **policy-, gate-, and approval-driven workflow engine** - NOT an auton
 3. Implement the task following the subtasks
 4. Verify proof exists (tests pass, files created)
 5. Update `.ai/STATUS.json` (move task to completed, set new next)
+6. After completing each task:
+   - Read `.ai/DOC_ALIGNMENT_REPORT.md`
+   - If any docs are ❌ MISALIGNED with your changes, fix them
+   - Docs follow code - update docs to match implementation
+   - Keep Future sections for unimplemented features
+   - Update `.ai/STATUS.json`
 
 ## Key Principles
 - ONE task per loop - complete fully before moving on

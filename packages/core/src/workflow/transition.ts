@@ -9,8 +9,9 @@ export type TransitionContext = {
 
   hasApprovalToApply: boolean;
 
-  // Phase 4+ hooks (safe to ignore until implemented)
+  // Phase 4 - policy evaluation
   hasBlockingPolicyViolations?: boolean;
+  hasPolicyBeenEvaluated?: boolean;
 
   // optional: attempt counts, retry budgets later
 };
@@ -58,12 +59,24 @@ export function transition(
     }
   }
 
-  // PATCHES_PROPOSED normalizes to WAITING_USER_APPROVAL
+  // PATCHES_PROPOSED state - evaluate policy before moving to approval
   if (current === 'PATCHES_PROPOSED') {
-    // Any event in this state should normalize to WAITING_USER_APPROVAL
-    if (ctx.hasPatchSets) {
-      return result('WAITING_USER_APPROVAL', [], 'Patches proposed, awaiting user approval');
+    // Policy evaluation event
+    if (event.type === 'E_POLICY_EVALUATED') {
+      if (event.result.hasBlockingViolations) {
+        return result('BLOCKED_POLICY', [], 'Policy violations detected in proposed patches');
+      }
+      // Policy passed (or only warnings), move to approval
+      return result('WAITING_USER_APPROVAL', [], 'Policy evaluation passed, awaiting user approval');
     }
+
+    // Trigger policy evaluation if patchsets exist
+    if (ctx.hasPatchSets && ctx.latestPatchSetId) {
+      return result('PATCHES_PROPOSED', [
+        { queue: 'workflow', name: 'evaluate_policy', payload: { workflowId: ctx.workflowId, patchSetId: ctx.latestPatchSetId } }
+      ], 'Patches proposed, enqueueing policy evaluation');
+    }
+
     return result('NEEDS_HUMAN', [], 'No patch sets available');
   }
 
@@ -71,11 +84,24 @@ export function transition(
   if (current === 'WAITING_USER_APPROVAL') {
     if (event.type === 'E_APPROVAL_RECORDED') {
       if (ctx.hasApprovalToApply && ctx.latestPatchSetId) {
+        // Check if policy has already been evaluated and blocked
+        if (ctx.hasBlockingPolicyViolations) {
+          return result('BLOCKED_POLICY', [], 'Approval recorded but policy violations exist');
+        }
         return result('APPLYING_PATCHES', [
           { queue: 'workflow', name: 'apply_patches', payload: { workflowId: ctx.workflowId, patchSetId: ctx.latestPatchSetId } }
         ], 'Approval recorded, enqueueing apply_patches');
       }
       return result('WAITING_USER_APPROVAL', [], 'Approval event received but approval not valid');
+    }
+
+    // Policy evaluation in WAITING_USER_APPROVAL state
+    if (event.type === 'E_POLICY_EVALUATED') {
+      if (event.result.hasBlockingViolations) {
+        return result('BLOCKED_POLICY', [], 'Policy violations detected during approval review');
+      }
+      // Non-blocking evaluation doesn't change state
+      return result('WAITING_USER_APPROVAL', [], 'Policy evaluated with warnings only');
     }
   }
 

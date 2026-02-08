@@ -274,7 +274,8 @@
 ## PHASE 4 — POLICY ENGINE & GATE2
 
 ### T4.1 Policy Engine v1
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/policy/policy-engine.ts, packages/core/src/policy/diff-parser.ts, test/unit/policy-engine.spec.ts (29 tests), prisma/schema.prisma PolicyViolation model -->
 
 **Goal:** Block unsafe diffs.
 
@@ -299,7 +300,8 @@
 ---
 
 ### T4.2 Gate2 (Containment)
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/policy/gate2.ts, test/unit/gate2.spec.ts (25 tests), updated transition.ts with policy evaluation flow -->
 
 **Goal:** Prevent unsafe execution.
 
@@ -324,7 +326,8 @@
 ## PHASE 5 — REAL GITHUB INTEGRATION
 
 ### T5.1 GitHub App + Client
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/github/github-client.ts (interface + stub), packages/core/src/github/octokit-client.ts (Octokit impl + token manager), test/unit/github-client.spec.ts (12 tests), updated WriteGate with new operations -->
 
 **Goal:** Replace stub safely.
 
@@ -348,7 +351,8 @@
 ---
 
 ### T5.2 Real Patch Application
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/github/patch-applicator.ts (PatchApplicator class, applyDiffToContent, extractFileChangesFromDiff), test/unit/patch-applicator.spec.ts (13 tests) -->
 
 **Goal:** Apply diffs correctly.
 
@@ -376,7 +380,8 @@
 ## PHASE 6 — CI & COMPLETION
 
 ### T6.1 Webhook Ingestion
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/github/webhook.ts (signature verification, event parsing), packages/core/src/github/webhook-service.ts (persistence + processing), prisma/schema.prisma (GitHubWebhook model), test/unit/webhook.spec.ts (26 tests) -->
 
 **Goal:** React to GitHub events.
 
@@ -398,7 +403,8 @@
 ---
 
 ### T6.2 Gate3+ (CI, Architecture, Ops)
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/policy/gate3.ts (Gate3Service, mapWebhookToCIEvent, quality gates), test/unit/gate3.spec.ts (20 tests), transition.ts already handles E_CI_COMPLETED -->
 
 **Goal:** Define "done".
 
@@ -424,7 +430,8 @@
 ## PHASE 7 — LLM INTEGRATION
 
 ### T7.1 LLM Runner Layer
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/llm/types.ts, prompts.ts (6 roles with versioning), schemas.ts (JSON validation + 4 pre-defined schemas), runner.ts (LLMRunner with retry/budget/validation, StubLLMProvider), test/unit/llm-runner.spec.ts (46 tests) -->
 
 **Goal:** Controlled intelligence.
 
@@ -448,7 +455,8 @@
 ---
 
 ### T7.2 Replace Stubs
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/llm/artifact-generator.ts (ArtifactGenerator with Decision/Plan schemas), packages/core/src/llm/patch-generator.ts (PatchGenerator with diff generation), test/unit/artifact-patch-generator.spec.ts (21 tests), 230 unit tests passing -->
 
 **Goal:** End-to-end intelligence.
 
@@ -473,7 +481,8 @@
 ## PHASE 8 — CONTEXT & MEMORY (CodeFRAME-inspired)
 
 ### T8.1 Tiered Memory Management
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
+<!-- PROOF: packages/core/src/memory/types.ts (MemoryTier, MemoryItem, TierConfig, TokenSavings), packages/core/src/memory/context-loader.ts (ContextLoader with tier loading, formatContextAsText), test/unit/memory.spec.ts (24 tests) -->
 
 **Goal:** Reduce token usage 30-50% with smart context loading.
 
@@ -500,7 +509,7 @@
 ---
 
 ### T8.2 Cost & Token Tracking
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
 
 **Goal:** Real-time usage analytics with budget limits.
 
@@ -528,7 +537,7 @@
 ## PHASE 9 — PRD & TEMPLATES
 
 ### T9.1 PRD Templates
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
 
 **Goal:** Structured input formats for consistent output.
 
@@ -556,7 +565,7 @@
 ---
 
 ### T9.2 PRD-to-Artifacts Pipeline
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
 
 **Goal:** Auto-generate SCOPE, PLAN, GATES from PRD.
 
@@ -583,7 +592,7 @@
 ## PHASE 10 — SPECIALIST AGENTS (with approval gates)
 
 ### T10.1 Agent Framework
-<!-- STATUS: PENDING -->
+<!-- STATUS: DONE -->
 
 **Goal:** Pluggable specialist agents that propose (not execute).
 
@@ -938,3 +947,82 @@
 **Proof**
 
 * Production URL shows workflows
+
+---
+
+## PHASE 13 — DOCUMENTATION
+
+### T13.1 API Documentation (OpenAPI/Swagger)
+<!-- STATUS: PENDING -->
+
+**Goal:** Auto-generated, always up-to-date API docs.
+
+**Subtasks**
+
+* T13.1.1 Add `@nestjs/swagger` to API app
+* T13.1.2 Add OpenAPI decorators to all controllers
+* T13.1.3 Configure Swagger UI at `/api/docs`
+* T13.1.4 Add request/response DTOs with validation decorators
+* T13.1.5 Export `openapi.json` for external tools
+
+**Acceptance**
+
+* Swagger UI accessible at `/api/docs`
+* All endpoints documented with examples
+* DTOs have proper types and descriptions
+
+**Proof**
+
+* Screenshot of Swagger UI
+* openapi.json file in repo
+
+---
+
+### T13.2 README Updates
+<!-- STATUS: PENDING -->
+
+**Goal:** Clear onboarding documentation.
+
+**Subtasks**
+
+* T13.2.1 Root README with project overview
+* T13.2.2 Quick start guide (prerequisites, setup, run)
+* T13.2.3 Architecture diagram (Mermaid)
+* T13.2.4 Package READMEs (`packages/core`, `packages/db`)
+* T13.2.5 App READMEs (`apps/api`, `apps/worker`, `apps/web`)
+* T13.2.6 Environment variables documentation
+
+**Acceptance**
+
+* New developer can set up project from README alone
+* Architecture is visually explained
+* All env vars documented with examples
+
+**Proof**
+
+* README files exist
+* Fresh clone → running system following docs
+
+---
+
+### T13.3 Changelog & Release Notes
+<!-- STATUS: PENDING -->
+
+**Goal:** Track changes and releases.
+
+**Subtasks**
+
+* T13.3.1 Add CHANGELOG.md with Keep-a-Changelog format
+* T13.3.2 Document all completed phases
+* T13.3.3 Add `npm run changelog` script (conventional-changelog)
+* T13.3.4 Add release workflow (GitHub Releases)
+
+**Acceptance**
+
+* CHANGELOG reflects all major changes
+* Release process documented
+
+**Proof**
+
+* CHANGELOG.md exists
+* At least one release tag

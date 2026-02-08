@@ -3,11 +3,63 @@ import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { getPrisma } from '@db';
 
+interface ListParams {
+  limit: number;
+  cursor?: string;
+  status?: string;
+}
+
+interface WorkflowListItem {
+  id: string;
+  state: string;
+  createdAt: Date;
+  baseSha: string | null;
+}
+
+interface ListResult {
+  items: WorkflowListItem[];
+  nextCursor: string | null;
+}
+
 @Injectable()
 export class WorkflowsService {
   private prisma = getPrisma();
 
   constructor(@InjectQueue('workflow') private readonly workflowQueue: Queue) {}
+
+  async list(params: ListParams): Promise<ListResult> {
+    const { limit, cursor, status } = params;
+
+    // Build where clause
+    const where: Record<string, unknown> = {};
+    if (status) {
+      where.state = status;
+    }
+    if (cursor) {
+      where.createdAt = { lt: new Date(cursor) };
+    }
+
+    // Fetch one extra to determine if there's a next page
+    const workflows = await this.prisma.workflow.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      select: {
+        id: true,
+        state: true,
+        createdAt: true,
+        baseSha: true,
+      },
+    });
+
+    const hasMore = workflows.length > limit;
+    const items = hasMore ? workflows.slice(0, limit) : workflows;
+    const nextCursor = hasMore && items.length > 0
+      ? items[items.length - 1].createdAt.toISOString()
+      : null;
+
+    return { items, nextCursor };
+  }
 
   async create(title: string) {
     const workflow = await this.prisma.workflow.create({
@@ -86,6 +138,76 @@ export class WorkflowsService {
     await this.workflowQueue.add('orchestrate', {
       workflowId,
       event: { type: 'E_APPROVAL_RECORDED' }
+    });
+
+    return { ok: true, workflowId, patchSetId: patchSet.id };
+  }
+
+  async requestChanges(workflowId: string, patchSetId?: string, comment: string = '', requestedBy: string = 'me') {
+    // Pick latest patch set if not provided
+    const patchSet =
+      patchSetId
+        ? await this.prisma.patchSet.findUnique({ where: { id: patchSetId } })
+        : await this.prisma.patchSet.findFirst({
+            where: { workflowId },
+            orderBy: { createdAt: 'desc' }
+          });
+
+    if (!patchSet) {
+      return { ok: false, error: 'NO_PATCH_SET_FOUND' };
+    }
+
+    // Record event for request changes
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: 'ui.request_changes',
+        payload: { patchSetId: patchSet.id, comment, requestedBy }
+      }
+    });
+
+    // Emit event to orchestrator
+    await this.workflowQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_CHANGES_REQUESTED', comment }
+    });
+
+    return { ok: true, workflowId, patchSetId: patchSet.id };
+  }
+
+  async reject(workflowId: string, patchSetId?: string, reason: string = '', rejectedBy: string = 'me') {
+    // Pick latest patch set if not provided
+    const patchSet =
+      patchSetId
+        ? await this.prisma.patchSet.findUnique({ where: { id: patchSetId } })
+        : await this.prisma.patchSet.findFirst({
+            where: { workflowId },
+            orderBy: { createdAt: 'desc' }
+          });
+
+    if (!patchSet) {
+      return { ok: false, error: 'NO_PATCH_SET_FOUND' };
+    }
+
+    // Update patch set status to rejected
+    await this.prisma.patchSet.update({
+      where: { id: patchSet.id },
+      data: { status: 'rejected' }
+    });
+
+    // Record event for rejection
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: 'ui.reject',
+        payload: { patchSetId: patchSet.id, reason, rejectedBy }
+      }
+    });
+
+    // Emit event to orchestrator
+    await this.workflowQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_PATCH_SET_REJECTED', reason }
     });
 
     return { ok: true, workflowId, patchSetId: patchSet.id };

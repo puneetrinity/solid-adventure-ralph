@@ -1,3 +1,16 @@
+/**
+ * GitHub Client Interface and Types
+ *
+ * This module defines the interface for GitHub operations.
+ * The interface is implemented by:
+ * - StubGitHubClient: For testing (no real API calls)
+ * - OctokitGitHubClient: For production (real GitHub API via Octokit)
+ */
+
+// ============================================================================
+// Types for Pull Request Operations
+// ============================================================================
+
 export type OpenPullRequestParams = {
   owner: string;
   repo: string;
@@ -12,6 +25,207 @@ export type OpenPullRequestResult = {
   number: number;
 };
 
+// ============================================================================
+// Types for Repository Operations
+// ============================================================================
+
+export type GetRepositoryParams = {
+  owner: string;
+  repo: string;
+};
+
+export type RepositoryInfo = {
+  id: number;
+  name: string;
+  fullName: string;
+  defaultBranch: string;
+  private: boolean;
+  htmlUrl: string;
+};
+
+export type GetFileContentsParams = {
+  owner: string;
+  repo: string;
+  path: string;
+  ref?: string; // branch, tag, or commit SHA
+};
+
+export type FileContents = {
+  path: string;
+  content: string; // base64 decoded
+  sha: string;
+  size: number;
+};
+
+export type GetBranchParams = {
+  owner: string;
+  repo: string;
+  branch: string;
+};
+
+export type BranchInfo = {
+  name: string;
+  sha: string;
+  protected: boolean;
+};
+
+// ============================================================================
+// Types for Branch/Commit Operations
+// ============================================================================
+
+export type CreateBranchParams = {
+  owner: string;
+  repo: string;
+  branch: string;
+  sha: string; // base commit SHA
+};
+
+export type CreateBranchResult = {
+  ref: string;
+  sha: string;
+};
+
+export type CreateCommitParams = {
+  owner: string;
+  repo: string;
+  message: string;
+  tree: string; // tree SHA
+  parents: string[]; // parent commit SHAs
+};
+
+export type CreateCommitResult = {
+  sha: string;
+  message: string;
+  url: string;
+};
+
+export type UpdateFileParams = {
+  owner: string;
+  repo: string;
+  path: string;
+  message: string;
+  content: string; // base64 encoded
+  sha?: string; // required for updates, not for new files
+  branch: string;
+};
+
+export type UpdateFileResult = {
+  path: string;
+  sha: string;
+  commitSha: string;
+};
+
+// ============================================================================
+// GitHub Client Interface
+// ============================================================================
+
+/**
+ * GitHubClient interface defines all operations supported by the client.
+ * Implementations must be behind WriteGate for write operations.
+ */
 export interface GitHubClient {
+  // Read operations (no approval needed)
+  getRepository(params: GetRepositoryParams): Promise<RepositoryInfo>;
+  getFileContents(params: GetFileContentsParams): Promise<FileContents>;
+  getBranch(params: GetBranchParams): Promise<BranchInfo>;
+
+  // Write operations (require approval via WriteGate)
+  createBranch(params: CreateBranchParams): Promise<CreateBranchResult>;
+  updateFile(params: UpdateFileParams): Promise<UpdateFileResult>;
   openPullRequest(params: OpenPullRequestParams): Promise<OpenPullRequestResult>;
+}
+
+// ============================================================================
+// GitHub App Configuration
+// ============================================================================
+
+export interface GitHubAppConfig {
+  appId: string;
+  privateKey: string; // PEM format
+  installationId: string;
+  baseUrl?: string; // Optional for GitHub Enterprise
+}
+
+// ============================================================================
+// Stub Implementation (for testing)
+// ============================================================================
+
+/**
+ * Stub implementation of GitHubClient for testing.
+ * Returns mock data without making real API calls.
+ */
+export class StubGitHubClient implements GitHubClient {
+  private nextPrNumber = 1;
+  private readonly createdBranches: Map<string, CreateBranchResult> = new Map();
+  private readonly createdFiles: Map<string, UpdateFileResult> = new Map();
+
+  async getRepository(params: GetRepositoryParams): Promise<RepositoryInfo> {
+    return {
+      id: 12345,
+      name: params.repo,
+      fullName: `${params.owner}/${params.repo}`,
+      defaultBranch: 'main',
+      private: false,
+      htmlUrl: `https://github.com/${params.owner}/${params.repo}`
+    };
+  }
+
+  async getFileContents(params: GetFileContentsParams): Promise<FileContents> {
+    return {
+      path: params.path,
+      content: '// stub file content',
+      sha: 'stub-file-sha-abc123',
+      size: 21
+    };
+  }
+
+  async getBranch(params: GetBranchParams): Promise<BranchInfo> {
+    return {
+      name: params.branch,
+      sha: 'stub-branch-sha-abc123',
+      protected: params.branch === 'main'
+    };
+  }
+
+  async createBranch(params: CreateBranchParams): Promise<CreateBranchResult> {
+    const result: CreateBranchResult = {
+      ref: `refs/heads/${params.branch}`,
+      sha: params.sha
+    };
+    this.createdBranches.set(params.branch, result);
+    return result;
+  }
+
+  async updateFile(params: UpdateFileParams): Promise<UpdateFileResult> {
+    const result: UpdateFileResult = {
+      path: params.path,
+      sha: `stub-blob-sha-${Date.now()}`,
+      commitSha: `stub-commit-sha-${Date.now()}`
+    };
+    this.createdFiles.set(params.path, result);
+    return result;
+  }
+
+  async openPullRequest(params: OpenPullRequestParams): Promise<OpenPullRequestResult> {
+    const number = this.nextPrNumber++;
+    return {
+      url: `https://github.com/${params.owner}/${params.repo}/pull/${number}`,
+      number
+    };
+  }
+
+  // Test helpers
+  getCreatedBranches(): Map<string, CreateBranchResult> {
+    return new Map(this.createdBranches);
+  }
+
+  getCreatedFiles(): Map<string, UpdateFileResult> {
+    return new Map(this.createdFiles);
+  }
+
+  reset(): void {
+    this.nextPrNumber = 1;
+    this.createdBranches.clear();
+    this.createdFiles.clear();
+  }
 }

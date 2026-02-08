@@ -294,8 +294,8 @@ interface AppState {
 ## API Client
 
 ```ts
-// lib/api.ts
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+// src/api/client.ts
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 export const api = {
   workflows: {
@@ -323,21 +323,75 @@ export const api = {
 
 ---
 
-## Real-time Updates (SSE)
+## Real-time Updates (Polling for MVP)
+
+For MVP, we use polling instead of SSE for simplicity:
 
 ```ts
-// hooks/use-sse.ts
+// src/hooks/use-workflow-polling.ts
+import { useState, useEffect, useCallback } from 'react';
+import { api } from '../api/client';
+
+const POLL_INTERVAL = 3000; // 3 seconds
+const TERMINAL_STATES = ['DONE', 'FAILED', 'NEEDS_HUMAN', 'BLOCKED_POLICY'];
+
+export function useWorkflowPolling(workflowId: string) {
+  const [workflow, setWorkflow] = useState<Workflow | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const fetchWorkflow = useCallback(async () => {
+    try {
+      const data = await api.workflows.get(workflowId);
+      setWorkflow(data);
+      setError(null);
+    } catch (err) {
+      setError(err as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [workflowId]);
+
+  useEffect(() => {
+    fetchWorkflow();
+
+    const interval = setInterval(() => {
+      // Stop polling on terminal states
+      if (workflow && TERMINAL_STATES.includes(workflow.state)) {
+        return;
+      }
+      fetchWorkflow();
+    }, POLL_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [fetchWorkflow, workflow?.state]);
+
+  return { workflow, isLoading, error, refetch: fetchWorkflow };
+}
+```
+
+Future SSE implementation (Phase 12+):
+```ts
+// src/hooks/use-workflow-stream.ts
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
+
 export function useWorkflowStream(workflowId: string) {
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
 
   useEffect(() => {
     const source = new EventSource(
-      `${API_BASE}/api/workflows/${workflowId}/stream`
+      `${API_BASE}/api/workflows/${workflowId}/stream`,
+      { withCredentials: true }
     );
 
     source.onmessage = (event) => {
       const data = JSON.parse(event.data);
       setEvents(prev => [...prev, data]);
+    };
+
+    source.onerror = () => {
+      source.close();
+      // Fallback to polling
     };
 
     return () => source.close();
@@ -351,31 +405,94 @@ export function useWorkflowStream(workflowId: string) {
 
 ## Authentication
 
-Using NextAuth.js with GitHub OAuth:
+Using GitHub OAuth with custom implementation (Vite + React):
 
 ```ts
-// app/api/auth/[...nextauth]/route.ts
-import NextAuth from 'next-auth';
-import GitHubProvider from 'next-auth/providers/github';
+// src/auth/github-auth.ts
+const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
-export const authOptions = {
-  providers: [
-    GitHubProvider({
-      clientId: process.env.GITHUB_CLIENT_ID!,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
-    }),
-  ],
-  callbacks: {
-    async signIn({ user }) {
-      // Single-user check
-      const allowedId = process.env.ALLOWED_GITHUB_USER_ID;
-      return user.id === allowedId;
-    },
-  },
-};
+export function initiateGitHubLogin() {
+  const params = new URLSearchParams({
+    client_id: GITHUB_CLIENT_ID,
+    redirect_uri: `${window.location.origin}/auth/callback`,
+    scope: 'read:user',
+  });
+  window.location.href = `https://github.com/login/oauth/authorize?${params}`;
+}
 
-export const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST };
+// src/auth/AuthContext.tsx
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+
+interface AuthContextType {
+  user: User | null;
+  isLoading: boolean;
+  login: () => void;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | null>(null);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Check session on mount
+    fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => setUser(data?.user ?? null))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{
+      user,
+      isLoading,
+      login: initiateGitHubLogin,
+      logout: () => fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' })
+        .then(() => setUser(null)),
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export const useAuth = () => useContext(AuthContext)!;
+```
+
+Backend auth endpoints (NestJS):
+```ts
+// apps/api/src/auth/auth.controller.ts
+@Controller('api/auth')
+export class AuthController {
+  @Get('callback')
+  async handleCallback(@Query('code') code: string, @Res() res: Response) {
+    // Exchange code for token, validate user, set session cookie
+    const token = await this.authService.exchangeCode(code);
+    const user = await this.authService.getUser(token);
+
+    // Single-user check
+    if (user.id !== process.env.ALLOWED_GITHUB_USER_ID) {
+      return res.redirect('/unauthorized');
+    }
+
+    // Set HTTP-only session cookie
+    res.cookie('session', this.authService.createSession(user), { httpOnly: true });
+    res.redirect('/');
+  }
+
+  @Get('session')
+  getSession(@Req() req: Request) {
+    return { user: req.session?.user ?? null };
+  }
+
+  @Post('logout')
+  logout(@Res() res: Response) {
+    res.clearCookie('session');
+    res.json({ ok: true });
+  }
+}
 ```
 
 ---

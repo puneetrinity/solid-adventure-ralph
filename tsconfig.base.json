@@ -9,9 +9,13 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "baseUrl": ".",
     "paths": {
+      "@core": ["packages/core/src/index"],
       "@core/*": ["packages/core/src/*"],
+      "@db": ["packages/db/src/index"],
       "@db/*": ["packages/db/src/*"]
     }
   }

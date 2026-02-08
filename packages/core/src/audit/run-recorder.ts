@@ -1,17 +1,20 @@
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import { computeContextHash } from './context-hash';
 
 export type RunStatus = 'pending' | 'running' | 'completed' | 'failed';
 
+// Use Prisma's JSON value types for compatibility
+type JsonValue = Prisma.InputJsonValue;
+
 export type StartRunParams = {
   workflowId: string;
   jobName: string;
-  inputs: Record<string, unknown>;
+  inputs: JsonValue;
 };
 
 export type CompleteRunParams = {
   runId: string;
-  outputs: Record<string, unknown>;
+  outputs: JsonValue;
 };
 
 export type FailRunParams = {
@@ -46,11 +49,7 @@ export class RunRecorder {
         status: 'running',
         inputHash,
         inputs: params.inputs,
-        outputs: null,
-        errorMsg: null,
-        startedAt: new Date(),
-        completedAt: null,
-        durationMs: null
+        startedAt: new Date()
       }
     });
 

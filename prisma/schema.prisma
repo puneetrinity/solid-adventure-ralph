@@ -14,12 +14,14 @@ model Workflow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  events       WorkflowEvent[]
-  artifacts    Artifact[]
-  approvals    Approval[]
-  patchSets    PatchSet[]
-  pullRequests PullRequest[]
-  runs         WorkflowRun[]
+  events           WorkflowEvent[]
+  artifacts        Artifact[]
+  approvals        Approval[]
+  patchSets        PatchSet[]
+  pullRequests     PullRequest[]
+  runs             WorkflowRun[]
+  policyViolations PolicyViolation[]
+  checkpoints      Checkpoint[]
 }
 
 model WorkflowEvent {
@@ -121,8 +123,76 @@ model WorkflowRun {
   completedAt DateTime?
   durationMs  Int?     // computed: completedAt - startedAt
 
+  // Token usage tracking (T8.2)
+  inputTokens   Int?    // tokens sent to LLM
+  outputTokens  Int?    // tokens received from LLM
+  totalTokens   Int?    // inputTokens + outputTokens
+  estimatedCost Int?    // cost in cents (USD)
+  agentRole     String? // architect | coder | reviewer | tester | diagnoser | documenter
+  promptVersion String? // version of prompt used
+  memoryTier    String? // HOT | WARM | COLD context used
+
   workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 
   @@index([workflowId, jobName, startedAt])
   @@index([inputHash])
+  @@index([workflowId, agentRole])
+}
+
+model PolicyViolation {
+  id          String   @id @default(uuid())
+  workflowId  String
+  patchSetId  String?  // optional - violations can be at workflow or patchset level
+  rule        String   // frozen_file | deny_glob | secret_detected | dependency_change
+  severity    String   // WARN | BLOCK
+  file        String   // file path that triggered the violation
+  message     String   // human-readable description
+  line        Int?     // optional line number
+  evidence    String?  // optional snippet/pattern that matched
+  createdAt   DateTime @default(now())
+
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, createdAt])
+  @@index([workflowId, severity])
+  @@index([patchSetId])
+}
+
+model GitHubWebhook {
+  id          String   @id @default(uuid())
+  deliveryId  String   @unique // X-GitHub-Delivery header
+  eventType   String   // push | pull_request | check_suite | workflow_run | etc
+  action      String?  // action field from payload (opened, closed, completed, etc)
+  repoOwner   String   // repository owner
+  repoName    String   // repository name
+  headSha     String?  // commit SHA if applicable
+  payload     Json     // full webhook payload
+  signature   String   // X-Hub-Signature-256 header value
+  processed   Boolean  @default(false) // whether this event has been processed
+  processedAt DateTime? // when the event was processed
+  createdAt   DateTime @default(now())
+
+  @@index([eventType, action])
+  @@index([repoOwner, repoName])
+  @@index([headSha])
+  @@index([processed, createdAt])
+}
+
+model Checkpoint {
+  id          String   @id @default(uuid())
+  workflowId  String
+  name        String   // descriptive name for the checkpoint
+  state       String   // workflow state at checkpoint
+  stageIndex  Int      // which stage (0, 1, 2, ...) in the workflow
+  stageName   String   // human-readable stage name
+  snapshot    Json     // full state snapshot (artifacts, patchsets, approvals, etc.)
+  metadata    Json?    // optional metadata (reason, trigger, etc.)
+  isAutomatic Boolean  @default(true)  // auto vs manual checkpoint
+  createdAt   DateTime @default(now())
+  createdBy   String?  // user who created (if manual)
+
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, createdAt])
+  @@index([workflowId, stageIndex])
 }
