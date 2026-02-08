@@ -1,0 +1,56 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  },
+  "services": {
+    "api": {
+      "source": {
+        "repo": "puneetrinity/solid-adventure-ralph",
+        "branch": "main",
+        "rootDirectory": "/"
+      },
+      "build": {
+        "builder": "NIXPACKS",
+        "buildCommand": "npm ci && npm run build -w packages/db -w packages/core -w apps/api"
+      },
+      "deploy": {
+        "startCommand": "npm run start:api",
+        "healthcheckPath": "/health",
+        "healthcheckTimeout": 30
+      }
+    },
+    "worker": {
+      "source": {
+        "repo": "puneetrinity/solid-adventure-ralph",
+        "branch": "main",
+        "rootDirectory": "/"
+      },
+      "build": {
+        "builder": "NIXPACKS",
+        "buildCommand": "npm ci && npm run build -w packages/db -w packages/core -w apps/worker"
+      },
+      "deploy": {
+        "startCommand": "npm run start:worker"
+      }
+    },
+    "web": {
+      "source": {
+        "repo": "puneetrinity/solid-adventure-ralph",
+        "branch": "main",
+        "rootDirectory": "apps/web"
+      },
+      "build": {
+        "builder": "DOCKERFILE",
+        "dockerfilePath": "Dockerfile"
+      },
+      "deploy": {
+        "healthcheckPath": "/"
+      }
+    }
+  }
+}
