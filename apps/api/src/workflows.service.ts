@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
-import { getPrisma } from '@db';
+import { getPrisma } from '@arch-orchestrator/db';
 
 interface ListParams {
   limit: number;
@@ -16,7 +16,7 @@ interface WorkflowListItem {
   baseSha: string | null;
 }
 
-interface ListResult {
+export interface ListResult {
   items: WorkflowListItem[];
   nextCursor: string | null;
 }
