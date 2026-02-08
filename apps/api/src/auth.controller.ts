@@ -15,6 +15,8 @@ interface GitHubTokenResponse {
   access_token: string;
   token_type: string;
   scope: string;
+  error?: string;
+  error_description?: string;
 }
 
 interface GitHubUserResponse {
@@ -86,6 +88,7 @@ export class AuthController {
         client_id: GITHUB_CLIENT_ID,
         client_secret: GITHUB_CLIENT_SECRET,
         code,
+        redirect_uri: `${FRONTEND_URL}/auth/callback`,
       }),
     });
 
@@ -99,7 +102,12 @@ export class AuthController {
 
     const tokenData = (await tokenResponse.json()) as GitHubTokenResponse;
     if (!tokenData.access_token) {
-      this.logger.error('No access token in GitHub response');
+      this.logger.error(
+        `No access token in GitHub response: ${JSON.stringify({
+          error: tokenData.error,
+          error_description: tokenData.error_description,
+        })}`
+      );
       throw new HttpException(
         { errorCode: 'GITHUB_AUTH_FAILED', message: 'Failed to authenticate with GitHub' },
         HttpStatus.UNAUTHORIZED
