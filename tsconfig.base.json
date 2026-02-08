@@ -13,10 +13,10 @@
     "emitDecoratorMetadata": true,
     "baseUrl": ".",
     "paths": {
-      "@core": ["packages/core/src/index"],
-      "@core/*": ["packages/core/src/*"],
-      "@db": ["packages/db/src/index"],
-      "@db/*": ["packages/db/src/*"]
+      "@core": ["packages/core/dist/index"],
+      "@core/*": ["packages/core/dist/*"],
+      "@db": ["packages/db/dist/index"],
+      "@db/*": ["packages/db/dist/*"]
     }
   }
 }
