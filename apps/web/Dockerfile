@@ -6,8 +6,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies - cache bust 20260208v2
+RUN npm install && echo "cache-bust-20260208v2"
 
 # Copy source
 COPY . .
