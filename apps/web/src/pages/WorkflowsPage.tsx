@@ -37,7 +37,8 @@ export function WorkflowsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   // New fields
-  const [createGoal, setCreateGoal] = useState('');
+  const [createFeatureGoal, setCreateFeatureGoal] = useState('');
+  const [createBusinessJustification, setCreateBusinessJustification] = useState('');
   const [createContext, setCreateContext] = useState('');
   const [createTitle, setCreateTitle] = useState('');
   const [createRepos, setCreateRepos] = useState<RepoEntry[]>([
@@ -229,9 +230,16 @@ export function WorkflowsPage() {
   const handleCreateWorkflow = async () => {
     if (isCreating) return;
 
-    const goal = createGoal.trim();
-    if (!goal) {
-      showToast('Goal is required', 'error');
+    const featureGoal = createFeatureGoal.trim();
+    const businessJustification = createBusinessJustification.trim();
+
+    if (!featureGoal) {
+      showToast('Feature Goal is required', 'error');
+      return;
+    }
+
+    if (!businessJustification) {
+      showToast('Business Justification is required', 'error');
       return;
     }
 
@@ -254,7 +262,9 @@ export function WorkflowsPage() {
     setIsCreating(true);
     try {
       await api.workflows.create({
-        goal,
+        featureGoal,
+        businessJustification,
+        goal: featureGoal, // Legacy field
         context: createContext.trim() || undefined,
         title: createTitle.trim() || undefined,
         repos: validRepos.map(r => ({
@@ -267,7 +277,8 @@ export function WorkflowsPage() {
       showToast('Workflow created', 'success');
       setShowCreateModal(false);
       // Reset form
-      setCreateGoal('');
+      setCreateFeatureGoal('');
+      setCreateBusinessJustification('');
       setCreateContext('');
       setCreateTitle('');
       setCreateRepos([{ owner: 'puneetrinity', repo: 'arch-orchestrator-sandbox', baseBranch: 'main', role: 'primary' }]);
@@ -402,6 +413,9 @@ export function WorkflowsPage() {
                   Repositories
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Stage
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   State
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -452,6 +466,23 @@ export function WorkflowsPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
+                    {workflow.stage && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-gray-700 capitalize">{workflow.stage}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full inline-block w-fit ${
+                          workflow.stageStatus === 'ready' ? 'bg-yellow-100 text-yellow-700' :
+                          workflow.stageStatus === 'processing' ? 'bg-blue-100 text-blue-700' :
+                          workflow.stageStatus === 'approved' ? 'bg-green-100 text-green-700' :
+                          workflow.stageStatus === 'rejected' ? 'bg-red-100 text-red-700' :
+                          workflow.stageStatus === 'needs_changes' ? 'bg-orange-100 text-orange-700' :
+                          'bg-gray-100 text-gray-600'
+                        }`}>
+                          {workflow.stageStatus || 'pending'}
+                        </span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
                     <WorkflowStatusBadge state={workflow.state} />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -496,30 +527,45 @@ export function WorkflowsPage() {
         title="Create Workflow"
       >
         <div className="space-y-4">
-          {/* Goal - Required */}
+          {/* Feature Goal - Required */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Goal *
+              Feature Goal *
             </label>
             <textarea
-              value={createGoal}
-              onChange={e => setCreateGoal(e.target.value)}
-              placeholder="Describe what you want to accomplish in plain English. E.g., 'Add a login button to the header that redirects to /auth'"
+              value={createFeatureGoal}
+              onChange={e => setCreateFeatureGoal(e.target.value)}
+              placeholder="What do you want to build? E.g., 'Add user authentication with OAuth support'"
               className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[80px] resize-y"
               disabled={isCreating}
             />
-            <p className="text-xs text-gray-500 mt-1">Plain English description of what the AI should implement</p>
+            <p className="text-xs text-gray-500 mt-1">Clear description of the feature you want to implement</p>
+          </div>
+
+          {/* Business Justification - Required */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Business Justification *
+            </label>
+            <textarea
+              value={createBusinessJustification}
+              onChange={e => setCreateBusinessJustification(e.target.value)}
+              placeholder="Why does this feature matter? E.g., 'Users need secure login. Current system has no authentication.'"
+              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[60px] resize-y"
+              disabled={isCreating}
+            />
+            <p className="text-xs text-gray-500 mt-1">Explain the business value and why this feature is needed</p>
           </div>
 
           {/* Context - Optional */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Context (optional)
+              Additional Context (optional)
             </label>
             <textarea
               value={createContext}
               onChange={e => setCreateContext(e.target.value)}
-              placeholder="Add extra context: links to issues, acceptance criteria, constraints, etc."
+              placeholder="Links to designs, acceptance criteria, technical constraints, etc."
               className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[60px] resize-y"
               disabled={isCreating}
             />
@@ -534,7 +580,7 @@ export function WorkflowsPage() {
               type="text"
               value={createTitle}
               onChange={e => setCreateTitle(e.target.value)}
-              placeholder="Short title (auto-generated from goal if empty)"
+              placeholder="Short title (auto-generated if empty)"
               className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
               disabled={isCreating}
             />
@@ -713,7 +759,7 @@ export function WorkflowsPage() {
             </button>
             <button
               onClick={handleCreateWorkflow}
-              disabled={isCreating || !createGoal.trim()}
+              disabled={isCreating || !createFeatureGoal.trim() || !createBusinessJustification.trim()}
               className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
             >
               {isCreating ? 'Creating...' : 'Create'}

@@ -481,18 +481,61 @@ export function WorkflowDetailPage() {
         </div>
       )}
 
+      {/* Feasibility Summary Card */}
+      {(() => {
+        const feasibilityArtifact = workflow.artifacts?.find(a => a.kind === 'FeasibilityV1');
+        if (!feasibilityArtifact) return null;
+        try {
+          const data = JSON.parse(feasibilityArtifact.content);
+          const bgColor = data.recommendation === 'proceed' ? 'bg-green-50 border-green-200' :
+                          data.recommendation === 'hold' ? 'bg-yellow-50 border-yellow-200' :
+                          'bg-red-50 border-red-200';
+          const textColor = data.recommendation === 'proceed' ? 'text-green-700' :
+                            data.recommendation === 'hold' ? 'text-yellow-700' : 'text-red-700';
+          return (
+            <div className={`rounded-lg border p-3 ${bgColor}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Lightbulb className={`h-5 w-5 ${textColor}`} />
+                  <div>
+                    <span className={`font-semibold capitalize ${textColor}`}>
+                      Feasibility: {data.recommendation}
+                    </span>
+                    <span className="text-gray-600 ml-3 text-sm">
+                      {data.risks?.length || 0} risks · {data.unknowns?.length || 0} unknowns · {data.alternatives?.length || 0} alternatives
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setActiveTab('feasibility')}
+                  className="text-sm text-blue-600 hover:underline"
+                >
+                  View Details →
+                </button>
+              </div>
+            </div>
+          );
+        } catch { return null; }
+      })()}
+
       {/* Goal & Context */}
-      {(workflow.goal || workflow.context) && (
+      {(workflow.featureGoal || workflow.businessJustification || workflow.goal || workflow.context) && (
         <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
-          {workflow.goal && (
+          {(workflow.featureGoal || workflow.goal) && (
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Goal</p>
-              <p className="text-sm text-gray-900">{workflow.goal}</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Feature Goal</p>
+              <p className="text-sm text-gray-900">{workflow.featureGoal || workflow.goal}</p>
+            </div>
+          )}
+          {workflow.businessJustification && (
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Business Justification</p>
+              <p className="text-sm text-gray-700">{workflow.businessJustification}</p>
             </div>
           )}
           {workflow.context && (
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Context</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Additional Context</p>
               <p className="text-sm text-gray-700 whitespace-pre-wrap">{workflow.context}</p>
             </div>
           )}
@@ -632,17 +675,45 @@ export function WorkflowDetailPage() {
             const runsCount = tab === 'runs' ? (workflow.runs?.length ?? 0) : 0;
             const reposCount = tab === 'architecture' ? (workflow.repos?.length ?? 0) : 0;
             const hasFeasibility = tab === 'feasibility' && workflow.artifacts?.some(a => a.kind === 'FeasibilityV1');
+
+            // Gate-locking: determine which tabs are accessible based on current stage
+            const stageOrder = ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr', 'done'];
+            const currentStageIndex = workflow.stage ? stageOrder.indexOf(workflow.stage) : 0;
+
+            // Map tabs to stage requirements
+            const tabStageMap: Record<string, number> = {
+              'overview': -1,  // Always accessible
+              'feasibility': 0,
+              'architecture': 1,
+              'timeline': 2,
+              'artifacts': -1, // Always accessible
+              'policy': 4,
+              'patches': 3,
+              'runs': -1,  // Always accessible
+            };
+
+            const tabRequiredStage = tabStageMap[tab] ?? -1;
+            const isLocked = tabRequiredStage > 0 && currentStageIndex < tabRequiredStage;
+            const hasArtifact = tab === 'feasibility' ? workflow.artifacts?.some(a => a.kind === 'FeasibilityV1') :
+                              tab === 'architecture' ? workflow.artifacts?.some(a => a.kind === 'ArchitectureV1') :
+                              tab === 'timeline' ? workflow.artifacts?.some(a => a.kind === 'TimelineV1') : false;
+
             return (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => !isLocked && setActiveTab(tab)}
+                disabled={isLocked}
                 className={`py-2 px-1 text-sm font-medium border-b-2 -mb-px flex items-center gap-1 ${
                   activeTab === tab
                     ? 'border-blue-500 text-blue-600'
+                    : isLocked
+                    ? 'border-transparent text-gray-300 cursor-not-allowed'
                     : 'border-transparent text-gray-500 hover:text-gray-700'
                 }`}
+                title={isLocked ? `Locked until ${stageOrder[tabRequiredStage]} stage is reached` : undefined}
               >
                 {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {isLocked && <span className="text-gray-300">🔒</span>}
                 {hasViolations && (
                   <span className={`ml-1 px-1.5 py-0.5 text-xs rounded-full ${
                     hasBlockingViolations ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
@@ -660,7 +731,7 @@ export function WorkflowDetailPage() {
                     {reposCount}
                   </span>
                 )}
-                {hasFeasibility && (
+                {(hasFeasibility || hasArtifact) && !isLocked && (
                   <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-600">
                     ✓
                   </span>

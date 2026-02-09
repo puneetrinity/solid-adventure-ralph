@@ -121,7 +121,9 @@ export const api = {
       fetchJson<PaginatedResponse<Workflow>>(`/api/workflows${qs(params)}`),
 
     create: (params: {
-      goal: string;
+      featureGoal?: string;
+      businessJustification?: string;
+      goal?: string;  // Legacy
       context?: string;
       title?: string;
       repos?: Array<{ owner: string; repo: string; baseBranch?: string; role?: string }>;
@@ -130,7 +132,7 @@ export const api = {
       repoName?: string;
       baseBranch?: string;
     }) =>
-      fetchJson<{ id: string; state: string; goal: string; context?: string; repos?: Array<{ owner: string; repo: string; baseBranch: string; role: string }> }>(`/api/workflows`, {
+      fetchJson<{ id: string; state: string; stage?: string; stageStatus?: string; featureGoal?: string; businessJustification?: string; goal?: string; context?: string; repos?: Array<{ owner: string; repo: string; baseBranch: string; role: string }> }>(`/api/workflows`, {
         method: 'POST',
         body: JSON.stringify(params),
       }),
