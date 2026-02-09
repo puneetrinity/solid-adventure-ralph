@@ -71,7 +71,7 @@ export function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { workflow, isLoading, error, refetch, isPolling, lastUpdated } = useWorkflow(id!);
-  const [activeTab, setActiveTab] = useState<'overview' | 'architecture' | 'timeline' | 'artifacts' | 'policy' | 'patches' | 'runs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'feasibility' | 'architecture' | 'timeline' | 'artifacts' | 'policy' | 'patches' | 'runs'>('overview');
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -626,11 +626,12 @@ export function WorkflowDetailPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-4">
-          {(['overview', 'architecture', 'timeline', 'artifacts', 'policy', 'patches', 'runs'] as const).map(tab => {
+          {(['overview', 'feasibility', 'architecture', 'timeline', 'artifacts', 'policy', 'patches', 'runs'] as const).map(tab => {
             const hasViolations = tab === 'policy' && (workflow.policyViolations?.length ?? 0) > 0;
             const hasBlockingViolations = tab === 'policy' && workflow.policyViolations?.some(v => v.severity === 'BLOCK');
             const runsCount = tab === 'runs' ? (workflow.runs?.length ?? 0) : 0;
             const reposCount = tab === 'architecture' ? (workflow.repos?.length ?? 0) : 0;
+            const hasFeasibility = tab === 'feasibility' && workflow.artifacts?.some(a => a.kind === 'FeasibilityV1');
             return (
               <button
                 key={tab}
@@ -659,6 +660,11 @@ export function WorkflowDetailPage() {
                     {reposCount}
                   </span>
                 )}
+                {hasFeasibility && (
+                  <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-600">
+                    ✓
+                  </span>
+                )}
               </button>
             );
           })}
@@ -668,6 +674,7 @@ export function WorkflowDetailPage() {
       {/* Tab content */}
       <div>
         {activeTab === 'overview' && <OverviewTab workflow={workflow} />}
+        {activeTab === 'feasibility' && <FeasibilityTab workflow={workflow} />}
         {activeTab === 'architecture' && <ArchitectureTab workflow={workflow} />}
         {activeTab === 'timeline' && <TimelineTab events={workflow.events || []} />}
         {activeTab === 'artifacts' && <ArtifactsTab artifacts={workflow.artifacts || []} />}
@@ -833,6 +840,160 @@ function EventIcon({ type }: { type: string }) {
     return <MessageSquare className="h-4 w-4 text-yellow-500" />;
   }
   return <Clock className="h-4 w-4 text-gray-400" />;
+}
+
+function FeasibilityTab({ workflow }: { workflow: Workflow }) {
+  const feasibilityArtifact = workflow.artifacts?.find(a => a.kind === 'FeasibilityV1');
+
+  if (!feasibilityArtifact) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
+        <Lightbulb className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+        <p className="text-gray-600">Feasibility analysis not yet available</p>
+        <p className="text-sm text-gray-500 mt-1">
+          {workflow.stageStatus === 'processing'
+            ? 'Analysis is currently running...'
+            : 'Analysis will begin when the workflow starts'}
+        </p>
+      </div>
+    );
+  }
+
+  let data: any = {};
+  try {
+    data = JSON.parse(feasibilityArtifact.content);
+  } catch {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+        <p className="text-red-700">Failed to parse feasibility data</p>
+      </div>
+    );
+  }
+
+  const recommendationColors = {
+    proceed: 'bg-green-50 border-green-200 text-green-800',
+    hold: 'bg-yellow-50 border-yellow-200 text-yellow-800',
+    reject: 'bg-red-50 border-red-200 text-red-800',
+  };
+
+  const recommendationIcons = {
+    proceed: <CheckCircle className="h-6 w-6 text-green-500" />,
+    hold: <AlertCircle className="h-6 w-6 text-yellow-500" />,
+    reject: <XCircle className="h-6 w-6 text-red-500" />,
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Recommendation Banner */}
+      <div className={`rounded-lg border p-4 ${recommendationColors[data.recommendation as keyof typeof recommendationColors] || 'bg-gray-50 border-gray-200'}`}>
+        <div className="flex items-start gap-4">
+          {recommendationIcons[data.recommendation as keyof typeof recommendationIcons] || <Lightbulb className="h-6 w-6 text-gray-500" />}
+          <div>
+            <h3 className="text-lg font-semibold capitalize">{data.recommendation || 'Unknown'}</h3>
+            <p className="mt-1">{data.reasoning || 'No reasoning provided'}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Inputs */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <h3 className="text-sm font-medium text-gray-900 mb-3">Feature Request</h3>
+        <div className="space-y-3">
+          {data.inputs?.featureGoal && (
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Feature Goal</p>
+              <p className="text-sm text-gray-700">{data.inputs.featureGoal}</p>
+            </div>
+          )}
+          {data.inputs?.businessJustification && (
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Business Justification</p>
+              <p className="text-sm text-gray-700">{data.inputs.businessJustification}</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* Risks */}
+        {data.risks?.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-red-500" />
+              Risks ({data.risks.length})
+            </h3>
+            <ul className="space-y-2">
+              {data.risks.map((risk: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-red-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{risk}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Alternatives */}
+        {data.alternatives?.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <Boxes className="h-4 w-4 text-blue-500" />
+              Alternatives ({data.alternatives.length})
+            </h3>
+            <ul className="space-y-2">
+              {data.alternatives.map((alt: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-blue-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{alt}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Unknowns */}
+        {data.unknowns?.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-yellow-500" />
+              Unknowns ({data.unknowns.length})
+            </h3>
+            <ul className="space-y-2">
+              {data.unknowns.map((unknown: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-yellow-500 mt-0.5">?</span>
+                  <span className="text-gray-700">{unknown}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Assumptions */}
+        {data.assumptions?.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3 flex items-center gap-2">
+              <Lightbulb className="h-4 w-4 text-purple-500" />
+              Assumptions ({data.assumptions.length})
+            </h3>
+            <ul className="space-y-2">
+              {data.assumptions.map((assumption: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-purple-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{assumption}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Metadata */}
+      <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500">
+        <span>Generated: {new Date(feasibilityArtifact.createdAt).toLocaleString()}</span>
+      </div>
+    </div>
+  );
 }
 
 function TimelineTab({ events }: { events: WorkflowEvent[] }) {

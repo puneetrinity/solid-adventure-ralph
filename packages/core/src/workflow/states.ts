@@ -12,7 +12,7 @@ export type WorkflowState =
   | 'REJECTED'; // User explicitly rejected via stage rejection
 
 // Legacy stage names for job processors
-export type StageName = 'ingest_context' | 'apply_patches' | 'evaluate_policy' | 'feasibility';
+export type StageName = 'ingest_context' | 'apply_patches' | 'evaluate_policy' | 'feasibility' | 'architecture' | 'timeline';
 
 // Gated pipeline stage names
 export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'patches' | 'policy' | 'pr' | 'done';

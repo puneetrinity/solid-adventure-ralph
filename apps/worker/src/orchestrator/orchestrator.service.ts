@@ -17,7 +17,9 @@ export class OrchestratorService {
     @InjectQueue('ingest_context') private readonly ingestContextQueue: Queue,
     @InjectQueue('apply_patches') private readonly applyPatchesQueue: Queue,
     @InjectQueue('evaluate_policy') private readonly evaluatePolicyQueue: Queue,
-    @InjectQueue('feasibility') private readonly feasibilityQueue: Queue
+    @InjectQueue('feasibility') private readonly feasibilityQueue: Queue,
+    @InjectQueue('architecture') private readonly architectureQueue: Queue,
+    @InjectQueue('timeline') private readonly timelineQueue: Queue
   ) {}
 
   /**
@@ -83,6 +85,10 @@ export class OrchestratorService {
       await this.evaluatePolicyQueue.add(jobName, payload);
     } else if (jobName === 'feasibility_analysis') {
       await this.feasibilityQueue.add(jobName, payload);
+    } else if (jobName === 'architecture_analysis') {
+      await this.architectureQueue.add(jobName, payload);
+    } else if (jobName === 'timeline_analysis') {
+      await this.timelineQueue.add(jobName, payload);
     } else {
       // Fallback to workflow queue for unknown job types
       await this.workflowQueue.add(jobName, payload);
