@@ -16,6 +16,8 @@ import type {
   FileContents,
   GetBranchParams,
   BranchInfo,
+  GetTreeParams,
+  TreeInfo,
   CreateBranchParams,
   CreateBranchResult,
   UpdateFileParams,
@@ -133,6 +135,27 @@ export class OctokitGitHubClient implements GitHubClient {
       name: data.name,
       sha: data.commit.sha,
       protected: data.protected
+    };
+  }
+
+  async getTree(params: GetTreeParams): Promise<TreeInfo> {
+    const { data } = await this.octokit.git.getTree({
+      owner: params.owner,
+      repo: params.repo,
+      tree_sha: params.sha,
+      recursive: params.recursive ? 'true' : undefined
+    });
+
+    return {
+      sha: data.sha,
+      tree: data.tree.map(item => ({
+        path: item.path || '',
+        mode: item.mode || '',
+        type: item.type as 'blob' | 'tree',
+        sha: item.sha || '',
+        size: item.size
+      })),
+      truncated: data.truncated
     };
   }
 

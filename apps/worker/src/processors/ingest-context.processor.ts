@@ -23,10 +23,36 @@ interface RepoContext {
   readmeContent: string;
   packageJson: string;
   baseSha: string;
+  // Repo tree structure
+  tree: Array<{ path: string; type: 'blob' | 'tree'; size?: number }>;
   // Stored project context (from RepoContext table)
   storedContextSummary?: string;
   storedContextContent?: string;
   storedContextPath?: string;
+  // Context audit trail
+  storedContextId?: string;
+  storedContextSha?: string;
+}
+
+interface FileChange {
+  path: string;
+  action: 'create' | 'modify' | 'delete';
+  content?: string; // Required for create/modify, not needed for delete
+  summary?: string;
+}
+
+interface LLMPatchResponse {
+  title?: string;
+  summary?: string;
+  files?: FileChange[];
+}
+
+interface PatchResult {
+  patchTitle: string;
+  patchSummary: string;
+  patchDiff: string;
+  files: Array<{ path: string; additions: number; deletions: number }>;
+  addsTests: boolean;
 }
 
 @Processor('ingest_context')
@@ -107,8 +133,8 @@ export class IngestContextProcessor extends WorkerHost {
           data: { baseSha: context.baseSha }
         });
 
-        // Generate patch for this repo
-        const { patchTitle, patchSummary, patchDiff } = await this.generatePatch(
+        // Generate patch for this repo (multi-file support)
+        const { patchTitle, patchSummary, patchDiff, files, addsTests } = await this.generatePatch(
           workflowId,
           workflow,
           repoConfig,
@@ -116,7 +142,7 @@ export class IngestContextProcessor extends WorkerHost {
           groqProvider
         );
 
-        // Create PatchSet for this repo
+        // Create PatchSet for this repo (with context audit trail)
         const patchSet = await this.prisma.patchSet.create({
           data: {
             workflowId,
@@ -124,7 +150,9 @@ export class IngestContextProcessor extends WorkerHost {
             baseSha: context.baseSha,
             status: 'proposed',
             repoOwner,
-            repoName
+            repoName,
+            contextId: context.storedContextId || null,
+            contextSha: context.storedContextSha || null
           }
         });
 
@@ -135,9 +163,9 @@ export class IngestContextProcessor extends WorkerHost {
             title: patchTitle,
             summary: patchSummary,
             diff: patchDiff,
-            files: [{ path: 'README.md', additions: 2, deletions: 0 }],
-            addsTests: false,
-            riskLevel: 'low',
+            files: files,
+            addsTests: addsTests,
+            riskLevel: files.length > 5 ? 'high' : files.length > 2 ? 'med' : 'low',
             proposedCommands: [],
             repoOwner,
             repoName
@@ -151,7 +179,17 @@ export class IngestContextProcessor extends WorkerHost {
           data: {
             workflowId,
             type: 'worker.ingest_context.repo_completed',
-            payload: { repoOwner, repoName, baseSha: context.baseSha, patchSetId: patchSet.id }
+            payload: {
+              repoOwner,
+              repoName,
+              baseSha: context.baseSha,
+              patchSetId: patchSet.id,
+              // Context audit trail
+              contextId: context.storedContextId || null,
+              contextSha: context.storedContextSha || null,
+              contextPath: context.storedContextPath || null,
+              usedStoredContext: !!context.storedContextId
+            }
           }
         });
       }
@@ -232,10 +270,28 @@ export class IngestContextProcessor extends WorkerHost {
     const baseSha = branch.sha;
     this.logger.log(`${owner}/${repo} base SHA: ${baseSha}`);
 
+    // Fetch repo tree
+    let tree: Array<{ path: string; type: 'blob' | 'tree'; size?: number }> = [];
+    try {
+      const treeResponse = await this.github.getTree({ owner, repo, sha: baseSha, recursive: true });
+      tree = treeResponse.tree
+        .filter(item => item.type === 'blob' || item.type === 'tree')
+        .map(item => ({
+          path: item.path,
+          type: item.type as 'blob' | 'tree',
+          size: item.size
+        }));
+      this.logger.log(`${owner}/${repo}: Fetched tree with ${tree.length} items`);
+    } catch (err) {
+      this.logger.warn(`${owner}/${repo}: Failed to fetch tree: ${err}`);
+    }
+
     // Check for stored project context first
     let storedContextSummary: string | undefined;
     let storedContextContent: string | undefined;
     let storedContextPath: string | undefined;
+    let storedContextId: string | undefined;
+    let storedContextSha: string | undefined;
 
     try {
       const storedContext = await this.prisma.repoContext.findUnique({
@@ -248,7 +304,9 @@ export class IngestContextProcessor extends WorkerHost {
         storedContextSummary = storedContext.summary || undefined;
         storedContextContent = storedContext.content || undefined;
         storedContextPath = storedContext.contextPath;
-        this.logger.log(`${owner}/${repo}: Using stored context from ${storedContextPath} (summary: ${storedContextSummary?.length || 0} chars)`);
+        storedContextId = storedContext.id;
+        storedContextSha = storedContext.baseSha || undefined;
+        this.logger.log(`${owner}/${repo}: Using stored context from ${storedContextPath} (id: ${storedContextId}, summary: ${storedContextSummary?.length || 0} chars)`);
       } else if (storedContext?.isStale) {
         this.logger.warn(`${owner}/${repo}: Stored context is stale, will fallback to README`);
       }
@@ -280,9 +338,12 @@ export class IngestContextProcessor extends WorkerHost {
       readmeContent,
       packageJson,
       baseSha,
+      tree,
       storedContextSummary,
       storedContextContent,
-      storedContextPath
+      storedContextPath,
+      storedContextId,
+      storedContextSha
     };
   }
 
@@ -292,20 +353,22 @@ export class IngestContextProcessor extends WorkerHost {
     repoConfig: RepoConfig,
     repoContext: RepoContext,
     groqProvider: ReturnType<typeof createGroqProvider>
-  ): Promise<{ patchTitle: string; patchSummary: string; patchDiff: string }> {
-    const { owner: repoOwner, repo: repoName } = repoConfig;
-    const { readmeContent, packageJson, storedContextSummary, storedContextPath } = repoContext;
+  ): Promise<PatchResult> {
+    const { owner: repoOwner, repo: repoName, baseBranch } = repoConfig;
+    const { readmeContent, packageJson, tree, storedContextSummary, storedContextPath, baseSha } = repoContext;
 
     let patchTitle = workflow.goal?.substring(0, 50) || 'Code change';
     let patchSummary = workflow.goal || 'Implement requested changes';
     let patchDiff = '';
+    let files: Array<{ path: string; additions: number; deletions: number }> = [];
+    let addsTests = false;
 
     if (groqProvider) {
-      this.logger.log(`Using Groq LLM to generate patch for ${repoOwner}/${repoName}...`);
+      this.logger.log(`Using Groq LLM to generate multi-file patch for ${repoOwner}/${repoName}...`);
       const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
 
       const promptParts = [
-        `You are an expert software engineer. Your task is to implement the following request.`,
+        `You are an expert software engineer. Your task is to implement the following request by modifying or creating files in the repository.`,
         ``
       ];
 
@@ -334,10 +397,26 @@ export class IngestContextProcessor extends WorkerHost {
 
       promptParts.push(
         `## Repository: ${repoOwner}/${repoName}`,
-        ``,
-        `## Current Files`,
         ``
       );
+
+      // Include tree structure (limited to avoid token overflow)
+      if (tree.length > 0) {
+        const fileTree = tree
+          .filter(item => item.type === 'blob')
+          .slice(0, 200) // Limit to first 200 files
+          .map(item => item.path)
+          .join('\n');
+        promptParts.push(
+          `## Repository File Structure`,
+          '```',
+          fileTree,
+          '```',
+          ``
+        );
+      }
+
+      promptParts.push(`## Key Files (current content)`, ``);
 
       if (readmeContent) {
         promptParts.push(`### README.md`, '```markdown', readmeContent, '```', ``);
@@ -349,15 +428,28 @@ export class IngestContextProcessor extends WorkerHost {
 
       promptParts.push(
         `## Instructions`,
-        `Based on the goal and context, generate a patch that implements the requested changes for this specific repository.`,
-        `Focus on the README.md file for now.`,
+        `Based on the goal and context, determine which files need to be created, modified, or deleted.`,
+        `You may modify existing files, create new ones, or delete files. Include test files if appropriate.`,
         ``,
-        `Respond with ONLY a JSON object in this exact format (no markdown code blocks, no explanation):`,
+        `Respond with ONLY a JSON object (no markdown code blocks, no explanation):`,
         `{`,
         `  "title": "Short title for the change (max 50 chars)",`,
         `  "summary": "Brief description of what this change does",`,
-        `  "newContent": "The complete new README.md content"`,
-        `}`
+        `  "files": [`,
+        `    {`,
+        `      "path": "relative/path/to/file.ts",`,
+        `      "action": "create" | "modify" | "delete",`,
+        `      "content": "complete new file content (not needed for delete)"`,
+        `    }`,
+        `  ]`,
+        `}`,
+        ``,
+        `Important:`,
+        `- For "modify" action, provide the complete new content (not a diff)`,
+        `- For "create" action, provide the full file content`,
+        `- For "delete" action, content is not needed`,
+        `- Keep changes focused and minimal`,
+        `- Include any necessary imports`
       );
 
       const prompt = promptParts.join('\n');
@@ -372,16 +464,88 @@ export class IngestContextProcessor extends WorkerHost {
           if (jsonContent.startsWith('```')) {
             jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
           }
-          const parsed = JSON.parse(jsonContent);
-          patchTitle = parsed.title || patchTitle;
-          patchSummary = parsed.summary || patchSummary;
+          const rawParsed = JSON.parse(jsonContent);
+          const parsed = this.validateLLMResponse(rawParsed);
 
-          if (parsed.newContent) {
-            const oldLines = (readmeContent || '').split('\n');
-            const newLines = parsed.newContent.split('\n');
-            patchDiff = this.generateSimpleDiff('README.md', oldLines, newLines);
+          if (!parsed) {
+            this.logger.warn(`Invalid LLM response structure for ${repoOwner}/${repoName}`);
+          } else {
+            patchTitle = parsed.title || patchTitle;
+            patchSummary = parsed.summary || patchSummary;
+
+            if (parsed.files && parsed.files.length > 0) {
+              const diffs: string[] = [];
+
+              for (const fileChange of parsed.files) {
+                const action = fileChange.action || 'modify';
+                let oldContent = '';
+                let oldLines: string[] = [];
+                let newLines: string[] = [];
+
+                // For modify/delete, we need the existing content
+                if (action === 'modify' || action === 'delete') {
+                  // Check if it's one of our pre-fetched files
+                  if (fileChange.path === 'README.md') {
+                    oldContent = readmeContent;
+                  } else if (fileChange.path === 'package.json') {
+                    oldContent = packageJson;
+                  } else {
+                    // Fetch from GitHub
+                    try {
+                      const file = await this.github.getFileContents({
+                        owner: repoOwner,
+                        repo: repoName,
+                        path: fileChange.path,
+                        ref: baseSha
+                      });
+                      oldContent = file.content;
+                      this.logger.log(`Fetched ${fileChange.path} for diff generation`);
+                    } catch {
+                      if (action === 'delete') {
+                        this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
+                        continue;
+                      }
+                      this.logger.warn(`Could not fetch ${fileChange.path}, treating as new file`);
+                    }
+                  }
+                  oldLines = oldContent ? oldContent.split('\n') : [];
+                }
+
+                // For create/modify, we need new content
+                if (action !== 'delete') {
+                  if (!fileChange.content) {
+                    this.logger.warn(`Missing content for ${action} action on ${fileChange.path}, skipping`);
+                    continue;
+                  }
+                  newLines = fileChange.content.split('\n');
+                }
+
+                // Determine effective action based on what we found
+                let effectiveAction = action;
+                if (action === 'modify' && oldLines.length === 0) {
+                  effectiveAction = 'create';
+                }
+
+                const fileDiff = this.generateDiff(fileChange.path, oldLines, newLines, effectiveAction);
+                diffs.push(fileDiff);
+
+                // Calculate additions/deletions
+                const additions = action === 'delete' ? 0 : newLines.length;
+                const deletions = action === 'create' ? 0 : oldLines.length;
+                files.push({ path: fileChange.path, additions, deletions });
+
+                // Check if this is a test file
+                if (fileChange.path.includes('test') || fileChange.path.includes('spec') || fileChange.path.includes('__tests__')) {
+                  addsTests = true;
+                }
+              }
+
+              if (diffs.length > 0) {
+                patchDiff = diffs.join('\n\n');
+                this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
+              }
+            }
           }
-          this.logger.log(`LLM generated patch for ${repoOwner}/${repoName}: ${patchTitle}`);
         } catch (parseErr) {
           this.logger.warn(`Failed to parse LLM response for ${repoOwner}/${repoName}: ${parseErr}`);
         }
@@ -400,13 +564,14 @@ export class IngestContextProcessor extends WorkerHost {
         '--- a/README.md',
         '+++ b/README.md',
         '@@ -1 +1,2 @@',
-        ` ${readmeContent.split('\n')[0] || '# Project'}`,
+        ` ${readmeContent?.split('\n')[0] || '# Project'}`,
         '+',
         '+This project is managed by arch-orchestrator.'
       ].join('\n');
+      files = [{ path: 'README.md', additions: 2, deletions: 0 }];
     }
 
-    return { patchTitle, patchSummary, patchDiff };
+    return { patchTitle, patchSummary, patchDiff, files, addsTests };
   }
 
   private buildDecisionArtifact(
@@ -440,22 +605,77 @@ export class IngestContextProcessor extends WorkerHost {
     return lines.join('\n');
   }
 
-  private generateSimpleDiff(path: string, oldLines: string[], newLines: string[]): string {
-    const diffLines = [
-      `diff --git a/${path} b/${path}`,
-      'index 0000000..1111111 100644',
-      `--- a/${path}`,
-      `+++ b/${path}`,
-      `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
-    ];
+  private generateDiff(
+    path: string,
+    oldLines: string[],
+    newLines: string[],
+    action: 'create' | 'modify' | 'delete'
+  ): string {
+    const diffLines: string[] = [`diff --git a/${path} b/${path}`];
 
-    for (const line of oldLines) {
-      diffLines.push(`-${line}`);
-    }
-    for (const line of newLines) {
-      diffLines.push(`+${line}`);
+    if (action === 'create') {
+      diffLines.push('new file mode 100644');
+      diffLines.push('index 0000000..1111111');
+      diffLines.push('--- /dev/null');
+      diffLines.push(`+++ b/${path}`);
+      diffLines.push(`@@ -0,0 +1,${newLines.length} @@`);
+      for (const line of newLines) {
+        diffLines.push(`+${line}`);
+      }
+    } else if (action === 'delete') {
+      diffLines.push('deleted file mode 100644');
+      diffLines.push('index 1111111..0000000');
+      diffLines.push(`--- a/${path}`);
+      diffLines.push('+++ /dev/null');
+      diffLines.push(`@@ -1,${oldLines.length} +0,0 @@`);
+      for (const line of oldLines) {
+        diffLines.push(`-${line}`);
+      }
+    } else {
+      // modify
+      diffLines.push('index 0000000..1111111 100644');
+      diffLines.push(`--- a/${path}`);
+      diffLines.push(`+++ b/${path}`);
+      diffLines.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
+      for (const line of oldLines) {
+        diffLines.push(`-${line}`);
+      }
+      for (const line of newLines) {
+        diffLines.push(`+${line}`);
+      }
     }
 
     return diffLines.join('\n');
+  }
+
+  private validateLLMResponse(parsed: unknown): LLMPatchResponse | null {
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    const response = parsed as Record<string, unknown>;
+
+    // Validate files array if present
+    if (response.files && Array.isArray(response.files)) {
+      const validFiles = response.files.filter((f: unknown) => {
+        if (!f || typeof f !== 'object') return false;
+        const file = f as Record<string, unknown>;
+        if (typeof file.path !== 'string' || !file.path.trim()) return false;
+        if (!['create', 'modify', 'delete'].includes(file.action as string)) {
+          // Default to 'modify' if action missing
+          file.action = 'modify';
+        }
+        // content required for create/modify
+        if (file.action !== 'delete' && typeof file.content !== 'string') return false;
+        return true;
+      });
+
+      if (validFiles.length === 0) return null;
+      response.files = validFiles;
+    }
+
+    return {
+      title: typeof response.title === 'string' ? response.title : undefined,
+      summary: typeof response.summary === 'string' ? response.summary : undefined,
+      files: response.files as FileChange[] | undefined
+    };
   }
 }

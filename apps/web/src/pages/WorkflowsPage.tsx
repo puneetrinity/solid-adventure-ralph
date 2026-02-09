@@ -1,11 +1,17 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { RefreshCw, AlertCircle, Inbox, Plus, X, GitBranch, Star } from 'lucide-react';
+import { RefreshCw, AlertCircle, Inbox, Plus, X, GitBranch, Star, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
 import { useWorkflows } from '../hooks/use-workflows';
 import { WorkflowStatusBadge } from '../components/workflow';
 import { Modal, Toast, useToast } from '../components/ui';
 import { api } from '../api/client';
 import type { GitHubRepo } from '../types';
+
+interface ContextStatus {
+  status: 'fresh' | 'stale' | 'missing';
+  updatedAt?: string;
+  summary?: string | null;
+}
 
 interface RepoEntry {
   owner: string;
@@ -41,6 +47,9 @@ export function WorkflowsPage() {
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
+  // Context status for each repo (keyed by "owner/repo/branch")
+  const [contextStatuses, setContextStatuses] = useState<Record<string, ContextStatus>>({});
+  const [refreshingContext, setRefreshingContext] = useState<Record<string, boolean>>({});
 
   // Parse repo filter for API params
   const [repoOwner, repoName] = repoFilter ? repoFilter.split('/') : [undefined, undefined];
@@ -107,6 +116,67 @@ export function WorkflowsPage() {
       })
       .finally(() => setReposLoading(false));
   }, [showCreateModal, reposLoading, availableRepos.length]);
+
+  // Fetch context status for each repo in the modal
+  const fetchContextStatus = useCallback(async (owner: string, repo: string, branch: string) => {
+    if (!owner || !repo) return;
+    const key = `${owner}/${repo}/${branch}`;
+    try {
+      const result = await api.repos.getContext(owner, repo, branch);
+      setContextStatuses(prev => ({
+        ...prev,
+        [key]: {
+          status: result.status,
+          updatedAt: result.context?.updatedAt,
+          summary: result.context?.summary,
+        }
+      }));
+    } catch (err) {
+      console.error('Failed to fetch context status:', err);
+      setContextStatuses(prev => ({
+        ...prev,
+        [key]: { status: 'missing' }
+      }));
+    }
+  }, []);
+
+  // Refresh context status when repos change in the modal
+  useEffect(() => {
+    if (!showCreateModal) return;
+    createRepos.forEach(repo => {
+      if (repo.owner && repo.repo) {
+        const key = `${repo.owner}/${repo.repo}/${repo.baseBranch}`;
+        // Only fetch if we don't have it yet
+        if (!contextStatuses[key]) {
+          fetchContextStatus(repo.owner, repo.repo, repo.baseBranch);
+        }
+      }
+    });
+  }, [showCreateModal, createRepos, contextStatuses, fetchContextStatus]);
+
+  const handleRefreshContext = async (owner: string, repo: string, branch: string) => {
+    const key = `${owner}/${repo}/${branch}`;
+    setRefreshingContext(prev => ({ ...prev, [key]: true }));
+    try {
+      await api.repos.refreshContext(owner, repo, branch);
+      showToast('Context refresh started', 'success');
+      // Clear the cached status so it refetches
+      setContextStatuses(prev => {
+        const newStatuses = { ...prev };
+        delete newStatuses[key];
+        return newStatuses;
+      });
+      // Refetch after a delay to see updated status
+      setTimeout(() => {
+        fetchContextStatus(owner, repo, branch);
+      }, 2000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to refresh context';
+      showToast(message, 'error');
+    } finally {
+      setRefreshingContext(prev => ({ ...prev, [key]: false }));
+    }
+  };
 
   const addRepo = () => {
     setCreateRepos([
@@ -492,90 +562,145 @@ export function WorkflowsPage() {
               </button>
             </div>
             <div className="space-y-3">
-              {createRepos.map((repo, index) => (
-                <div key={index} className="p-3 bg-gray-50 rounded-md border border-gray-200">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-gray-500">
-                      Repository {index + 1}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={repo.role}
-                        onChange={e => updateRepo(index, 'role', e.target.value)}
-                        disabled={isCreating}
-                        className="text-xs px-2 py-1 border border-gray-200 rounded bg-white"
-                      >
-                        <option value="primary">Primary</option>
-                        <option value="secondary">Secondary</option>
-                      </select>
-                      {createRepos.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeRepo(index)}
+              {createRepos.map((repo, index) => {
+                const contextKey = `${repo.owner}/${repo.repo}/${repo.baseBranch}`;
+                const contextStatus = contextStatuses[contextKey];
+                const isRefreshing = refreshingContext[contextKey];
+
+                return (
+                  <div key={index} className="p-3 bg-gray-50 rounded-md border border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-gray-500">
+                        Repository {index + 1}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={repo.role}
+                          onChange={e => updateRepo(index, 'role', e.target.value)}
                           disabled={isCreating}
-                          className="text-gray-400 hover:text-red-500 disabled:opacity-50"
+                          className="text-xs px-2 py-1 border border-gray-200 rounded bg-white"
                         >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
+                          <option value="primary">Primary</option>
+                          <option value="secondary">Secondary</option>
+                        </select>
+                        {createRepos.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeRepo(index)}
+                            disabled={isCreating}
+                            className="text-gray-400 hover:text-red-500 disabled:opacity-50"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="col-span-3">
-                      <select
-                        value=""
-                        onChange={e => {
-                          const value = e.target.value;
-                          if (!value) return;
-                          const selected = availableRepos.find(r => r.fullName === value);
-                          if (!selected) return;
-                          applyRepoSelection(index, selected);
-                        }}
-                        disabled={isCreating || availableRepos.length === 0}
-                        className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm bg-white disabled:opacity-50"
-                      >
-                        <option value="">
-                          {reposLoading
-                            ? 'Loading repositories...'
-                            : availableRepos.length === 0
-                            ? 'No GitHub repositories available'
-                            : 'Pick from GitHub (optional)'}
-                        </option>
-                        {availableRepos.map(repoOption => (
-                          <option key={repoOption.id} value={repoOption.fullName}>
-                            {repoOption.fullName}
-                            {repoOption.private ? ' (private)' : ''}
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-3">
+                        <select
+                          value=""
+                          onChange={e => {
+                            const value = e.target.value;
+                            if (!value) return;
+                            const selected = availableRepos.find(r => r.fullName === value);
+                            if (!selected) return;
+                            applyRepoSelection(index, selected);
+                          }}
+                          disabled={isCreating || availableRepos.length === 0}
+                          className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm bg-white disabled:opacity-50"
+                        >
+                          <option value="">
+                            {reposLoading
+                              ? 'Loading repositories...'
+                              : availableRepos.length === 0
+                              ? 'No GitHub repositories available'
+                              : 'Pick from GitHub (optional)'}
                           </option>
-                        ))}
-                      </select>
+                          {availableRepos.map(repoOption => (
+                            <option key={repoOption.id} value={repoOption.fullName}>
+                              {repoOption.fullName}
+                              {repoOption.private ? ' (private)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <input
+                        type="text"
+                        value={repo.owner}
+                        onChange={e => updateRepo(index, 'owner', e.target.value)}
+                        placeholder="Owner"
+                        className="px-2 py-1.5 border border-gray-200 rounded text-sm"
+                        disabled={isCreating}
+                      />
+                      <input
+                        type="text"
+                        value={repo.repo}
+                        onChange={e => updateRepo(index, 'repo', e.target.value)}
+                        placeholder="Repository"
+                        className="px-2 py-1.5 border border-gray-200 rounded text-sm"
+                        disabled={isCreating}
+                      />
+                      <input
+                        type="text"
+                        value={repo.baseBranch}
+                        onChange={e => updateRepo(index, 'baseBranch', e.target.value)}
+                        placeholder="Branch"
+                        className="px-2 py-1.5 border border-gray-200 rounded text-sm"
+                        disabled={isCreating}
+                      />
                     </div>
-                    <input
-                      type="text"
-                      value={repo.owner}
-                      onChange={e => updateRepo(index, 'owner', e.target.value)}
-                      placeholder="Owner"
-                      className="px-2 py-1.5 border border-gray-200 rounded text-sm"
-                      disabled={isCreating}
-                    />
-                    <input
-                      type="text"
-                      value={repo.repo}
-                      onChange={e => updateRepo(index, 'repo', e.target.value)}
-                      placeholder="Repository"
-                      className="px-2 py-1.5 border border-gray-200 rounded text-sm"
-                      disabled={isCreating}
-                    />
-                    <input
-                      type="text"
-                      value={repo.baseBranch}
-                      onChange={e => updateRepo(index, 'baseBranch', e.target.value)}
-                      placeholder="Branch"
-                      className="px-2 py-1.5 border border-gray-200 rounded text-sm"
-                      disabled={isCreating}
-                    />
+
+                    {/* Context Status */}
+                    {repo.owner && repo.repo && (
+                      <div className="mt-2 pt-2 border-t border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500">Context:</span>
+                            {!contextStatus ? (
+                              <span className="text-xs text-gray-400">Loading...</span>
+                            ) : contextStatus.status === 'fresh' ? (
+                              <span className="inline-flex items-center gap-1 text-xs text-green-600">
+                                <CheckCircle className="h-3 w-3" />
+                                Fresh
+                              </span>
+                            ) : contextStatus.status === 'stale' ? (
+                              <span className="inline-flex items-center gap-1 text-xs text-yellow-600">
+                                <AlertTriangle className="h-3 w-3" />
+                                Stale
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-xs text-red-600">
+                                <XCircle className="h-3 w-3" />
+                                Missing
+                              </span>
+                            )}
+                            {contextStatus?.updatedAt && (
+                              <span className="text-xs text-gray-400">
+                                (updated {new Date(contextStatus.updatedAt).toLocaleDateString()})
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRefreshContext(repo.owner, repo.repo, repo.baseBranch)}
+                            disabled={isCreating || isRefreshing}
+                            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                            title="Refresh project context from repository"
+                          >
+                            <RefreshCw className={`h-3 w-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+                            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+                          </button>
+                        </div>
+                        {contextStatus?.summary && (
+                          <p className="text-xs text-gray-500 mt-1 line-clamp-2" title={contextStatus.summary}>
+                            {contextStatus.summary}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             {reposError && (
               <p className="text-xs text-red-600 mt-1">{reposError}</p>

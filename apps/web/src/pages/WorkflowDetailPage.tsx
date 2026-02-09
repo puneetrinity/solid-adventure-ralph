@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -29,7 +29,35 @@ import { useWorkflow } from '../hooks/use-workflow';
 import { WorkflowStatusBadge } from '../components/workflow';
 import { Modal } from '../components/ui';
 import { api } from '../api/client';
-import type { Workflow, WorkflowEvent, Artifact, PatchSet, Patch, PolicyViolation, PullRequest, WorkflowRun } from '../types';
+import type {
+  Workflow,
+  WorkflowEvent,
+  Artifact,
+  PatchSet,
+  Patch,
+  PolicyViolation,
+  PullRequest,
+  WorkflowRun,
+  WorkflowRepo,
+} from '../types';
+
+type RepoContextStatus = {
+  status: 'fresh' | 'stale' | 'missing' | 'error';
+  context: {
+    id: string;
+    repoOwner: string;
+    repoName: string;
+    baseBranch: string;
+    baseSha: string | null;
+    contextPath: string;
+    summary: string | null;
+    isStale: boolean;
+    updatedAt: string;
+  } | null;
+  error?: string;
+};
+
+const repoKey = (repo: WorkflowRepo) => `${repo.owner}/${repo.repo}@${repo.baseBranch}`;
 
 export function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -39,8 +67,46 @@ export function WorkflowDetailPage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [repoContexts, setRepoContexts] = useState<Record<string, RepoContextStatus>>({});
+  const [repoContextLoading, setRepoContextLoading] = useState(false);
+  const [refreshingRepoKey, setRefreshingRepoKey] = useState<string | null>(null);
 
   const canCancel = workflow && ['INGESTED', 'PATCHES_PROPOSED', 'WAITING_USER_APPROVAL', 'APPLYING_PATCHES', 'PR_OPEN', 'VERIFYING_CI'].includes(workflow.state);
+
+  const repoKeySignature = (workflow?.repos || []).map(repoKey).join('|');
+
+  const loadRepoContexts = useCallback(async () => {
+    const repos = workflow?.repos || [];
+    if (repos.length === 0) {
+      setRepoContexts({});
+      return;
+    }
+
+    setRepoContextLoading(true);
+    try {
+      const entries = await Promise.all(
+        repos.map(async (repo) => {
+          const key = repoKey(repo);
+          try {
+            const result = await api.repos.getContext(repo.owner, repo.repo, repo.baseBranch);
+            return [key, result] as const;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to load context';
+            return [key, { status: 'error', context: null, error: message } as RepoContextStatus] as const;
+          }
+        })
+      );
+      const nextContexts = Object.fromEntries(entries) as Record<string, RepoContextStatus>;
+      setRepoContexts(nextContexts);
+    } finally {
+      setRepoContextLoading(false);
+    }
+  }, [workflow?.repos, repoKeySignature]);
+
+  useEffect(() => {
+    if (!workflow?.repos || workflow.repos.length === 0) return;
+    loadRepoContexts();
+  }, [repoKeySignature, loadRepoContexts]);
 
   const handleCancel = async () => {
     if (!workflow) return;
@@ -67,6 +133,20 @@ export function WorkflowDetailPage() {
       console.error('Failed to delete workflow:', err);
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleRefreshContext = async (repo: WorkflowRepo) => {
+    if (!workflow) return;
+    const key = repoKey(repo);
+    setRefreshingRepoKey(key);
+    try {
+      await api.repos.refreshContext(repo.owner, repo.repo, repo.baseBranch, workflow.id);
+      await loadRepoContexts();
+    } catch (err) {
+      console.error('Failed to refresh context:', err);
+    } finally {
+      setRefreshingRepoKey(null);
     }
   };
 
@@ -304,6 +384,68 @@ export function WorkflowDetailPage() {
                 )}
               </div>
             ))}
+          </div>
+
+          {/* Context status */}
+          <div className="mt-4 border-t border-gray-100 pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-gray-500 uppercase">Context Status</p>
+              {repoContextLoading && (
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                  Loading
+                </span>
+              )}
+            </div>
+            <div className="space-y-2">
+              {workflow.repos.map((repo) => {
+                const key = repoKey(repo);
+                const status = repoContexts[key]?.status ?? 'missing';
+                const context = repoContexts[key]?.context ?? null;
+                const statusLabel =
+                  status === 'fresh' ? 'Fresh' :
+                  status === 'stale' ? 'Stale' :
+                  status === 'error' ? 'Error' :
+                  'Missing';
+                const statusClass =
+                  status === 'fresh' ? 'bg-green-50 text-green-700 border-green-200' :
+                  status === 'stale' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
+                  status === 'error' ? 'bg-red-50 text-red-700 border-red-200' :
+                  'bg-gray-50 text-gray-600 border-gray-200';
+
+                return (
+                  <div key={key} className="flex items-center justify-between gap-3 p-2 bg-gray-50 rounded">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm text-gray-700">
+                          {repo.owner}/{repo.repo}
+                        </span>
+                        <span className={`text-[11px] px-2 py-0.5 rounded border ${statusClass}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {context?.contextPath ? `Context: ${context.contextPath}` : 'Context file not found'}
+                        {context?.updatedAt && (
+                          <span className="ml-2">• Updated {new Date(context.updatedAt).toLocaleString()}</span>
+                        )}
+                      </div>
+                      {repoContexts[key]?.error && (
+                        <div className="text-xs text-red-600 mt-1">{repoContexts[key]?.error}</div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleRefreshContext(repo)}
+                      disabled={refreshingRepoKey === key}
+                      className="flex items-center gap-2 px-2.5 py-1.5 text-xs bg-white border border-gray-200 rounded-md hover:bg-gray-100 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${refreshingRepoKey === key ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

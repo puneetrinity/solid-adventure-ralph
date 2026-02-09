@@ -237,9 +237,9 @@ export const api = {
         } | null;
       }>(`/api/repos/context${qs({ owner, repo, branch })}`),
 
-    refreshContext: (owner: string, repo: string, branch?: string) =>
+    refreshContext: (owner: string, repo: string, branch?: string, workflowId?: string) =>
       fetchJson<{ ok: boolean; jobId: string; message: string }>(
-        `/api/repos/context/refresh${qs({ owner, repo, branch })}`,
+        `/api/repos/context/refresh${qs({ owner, repo, branch, workflowId })}`,
         { method: 'POST' }
       ),
 

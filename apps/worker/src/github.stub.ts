@@ -8,6 +8,8 @@ import type {
   FileContents,
   GetBranchParams,
   BranchInfo,
+  GetTreeParams,
+  TreeInfo,
   CreateBranchParams,
   CreateBranchResult,
   UpdateFileParams,
@@ -42,6 +44,19 @@ export class StubGitHubClient implements GitHubClient {
       name: 'main',
       sha: 'stub-sha',
       protected: false
+    };
+  }
+
+  async getTree(_params: GetTreeParams): Promise<TreeInfo> {
+    return {
+      sha: 'stub-tree-sha',
+      tree: [
+        { path: 'README.md', mode: '100644', type: 'blob', sha: 'stub-blob-1', size: 100 },
+        { path: 'package.json', mode: '100644', type: 'blob', sha: 'stub-blob-2', size: 500 },
+        { path: 'src', mode: '040000', type: 'tree', sha: 'stub-tree-1' },
+        { path: 'src/index.ts', mode: '100644', type: 'blob', sha: 'stub-blob-3', size: 200 },
+      ],
+      truncated: false
     };
   }
 

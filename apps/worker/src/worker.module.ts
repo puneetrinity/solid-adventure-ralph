@@ -55,6 +55,26 @@ class TokenGitHubClient implements GitHubClient {
     return { name: data.name, sha: data.commit.sha, protected: data.protected };
   }
 
+  async getTree(params: { owner: string; repo: string; sha: string; recursive?: boolean }) {
+    const { data } = await this.octokit.git.getTree({
+      owner: params.owner,
+      repo: params.repo,
+      tree_sha: params.sha,
+      recursive: params.recursive ? 'true' : undefined
+    });
+    return {
+      sha: data.sha,
+      tree: data.tree.map(item => ({
+        path: item.path || '',
+        mode: item.mode || '',
+        type: item.type as 'blob' | 'tree',
+        sha: item.sha || '',
+        size: item.size
+      })),
+      truncated: data.truncated
+    };
+  }
+
   async createBranch(params: { owner: string; repo: string; branch: string; sha: string }) {
     const { data } = await this.octokit.git.createRef({
       owner: params.owner,

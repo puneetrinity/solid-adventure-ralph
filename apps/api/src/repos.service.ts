@@ -38,12 +38,28 @@ export class ReposService {
     };
   }
 
-  async refreshContext(repoOwner: string, repoName: string, baseBranch: string = 'main') {
+  async refreshContext(
+    repoOwner: string,
+    repoName: string,
+    baseBranch: string = 'main',
+    workflowId?: string
+  ) {
+    if (workflowId) {
+      await this.prisma.workflowEvent.create({
+        data: {
+          workflowId,
+          type: 'context.refresh_requested',
+          payload: { repoOwner, repoName, baseBranch }
+        }
+      });
+    }
+
     // Enqueue refresh job
     const job = await this.refreshContextQueue.add('refresh_context', {
       repoOwner,
       repoName,
       baseBranch,
+      workflowId,
     });
 
     return {

@@ -13,6 +13,7 @@ interface RefreshContextJobData {
   repoOwner: string;
   repoName: string;
   baseBranch: string;
+  workflowId?: string;
 }
 
 // Files to try for project context (in order of preference)
@@ -36,7 +37,7 @@ export class RefreshContextProcessor extends WorkerHost {
   }
 
   async process(job: Job<RefreshContextJobData>) {
-    const { repoOwner, repoName, baseBranch } = job.data;
+    const { repoOwner, repoName, baseBranch, workflowId } = job.data;
     this.logger.log(`Refreshing context for ${repoOwner}/${repoName}@${baseBranch}`);
 
     try {
@@ -131,6 +132,24 @@ ${content}`;
 
       this.logger.log(`Context refreshed for ${repoOwner}/${repoName}: ${contextPath ? 'found' : 'no context file'}`);
 
+      if (workflowId) {
+        await this.prisma.workflowEvent.create({
+          data: {
+            workflowId,
+            type: contextPath ? 'context.refreshed' : 'context.missing',
+            payload: {
+              repoOwner,
+              repoName,
+              baseBranch,
+              contextPath,
+              baseSha,
+              hasContent: !!content,
+              hasSummary: !!summary
+            }
+          }
+        });
+      }
+
       return {
         ok: true,
         repoOwner,
@@ -144,6 +163,25 @@ ${content}`;
 
     } catch (error: any) {
       this.logger.error(`Context refresh failed for ${repoOwner}/${repoName}: ${error?.message ?? error}`);
+
+      if (workflowId) {
+        try {
+          await this.prisma.workflowEvent.create({
+            data: {
+              workflowId,
+              type: 'context.refresh_failed',
+              payload: {
+                repoOwner,
+                repoName,
+                baseBranch,
+                error: error?.message ?? String(error)
+              }
+            }
+          });
+        } catch {
+          // Best-effort audit trail
+        }
+      }
 
       // Mark as stale if exists
       try {

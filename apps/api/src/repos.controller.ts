@@ -33,14 +33,16 @@ export class ReposController {
   @ApiQuery({ name: 'owner', required: true, description: 'Repository owner' })
   @ApiQuery({ name: 'repo', required: true, description: 'Repository name' })
   @ApiQuery({ name: 'branch', required: false, description: 'Base branch (default: main)' })
+  @ApiQuery({ name: 'workflowId', required: false, description: 'Optional workflow ID for audit trail' })
   @ApiResponse({ status: 200, description: 'Refresh job enqueued' })
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   async refreshContext(
     @Query('owner') owner: string,
     @Query('repo') repo: string,
-    @Query('branch') branch?: string
+    @Query('branch') branch?: string,
+    @Query('workflowId') workflowId?: string
   ) {
-    return this.repos.refreshContext(owner, repo, branch || 'main');
+    return this.repos.refreshContext(owner, repo, branch || 'main', workflowId);
   }
 
   @Get('contexts')

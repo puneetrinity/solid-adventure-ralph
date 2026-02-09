@@ -135,6 +135,10 @@ model PatchSet {
   repoOwner  String?
   repoName   String?
 
+  // Context audit trail: which context was used to generate this patch set
+  contextId  String?  // Reference to RepoContext.id used for generation
+  contextSha String?  // SHA of the context at generation time (for audit)
+
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   patches    Patch[]
   policyViolations PolicyViolation[]
@@ -142,6 +146,7 @@ model PatchSet {
   @@index([workflowId, createdAt])
   @@index([workflowId, status])
   @@index([repoOwner, repoName])
+  @@index([contextId])
 }
 
 model Patch {

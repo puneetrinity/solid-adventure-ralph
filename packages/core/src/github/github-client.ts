@@ -69,6 +69,27 @@ export type BranchInfo = {
   protected: boolean;
 };
 
+export type GetTreeParams = {
+  owner: string;
+  repo: string;
+  sha: string;
+  recursive?: boolean;
+};
+
+export type TreeItem = {
+  path: string;
+  mode: string;
+  type: 'blob' | 'tree';
+  sha: string;
+  size?: number;
+};
+
+export type TreeInfo = {
+  sha: string;
+  tree: TreeItem[];
+  truncated: boolean;
+};
+
 // ============================================================================
 // Types for Branch/Commit Operations
 // ============================================================================
@@ -141,6 +162,7 @@ export interface GitHubClient {
   getRepository(params: GetRepositoryParams): Promise<RepositoryInfo>;
   getFileContents(params: GetFileContentsParams): Promise<FileContents>;
   getBranch(params: GetBranchParams): Promise<BranchInfo>;
+  getTree(params: GetTreeParams): Promise<TreeInfo>;
 
   // Write operations (require approval via WriteGate)
   createBranch(params: CreateBranchParams): Promise<CreateBranchResult>;
@@ -198,6 +220,19 @@ export class StubGitHubClient implements GitHubClient {
       name: params.branch,
       sha: 'stub-branch-sha-abc123',
       protected: params.branch === 'main'
+    };
+  }
+
+  async getTree(params: GetTreeParams): Promise<TreeInfo> {
+    return {
+      sha: params.sha,
+      tree: [
+        { path: 'README.md', mode: '100644', type: 'blob', sha: 'stub-blob-1', size: 100 },
+        { path: 'package.json', mode: '100644', type: 'blob', sha: 'stub-blob-2', size: 500 },
+        { path: 'src', mode: '040000', type: 'tree', sha: 'stub-tree-1' },
+        { path: 'src/index.ts', mode: '100644', type: 'blob', sha: 'stub-blob-3', size: 200 },
+      ],
+      truncated: false
     };
   }
 
