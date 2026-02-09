@@ -325,6 +325,28 @@ export function transition(
       return result(current, jobs, `Stage ${event.stage} approved, enqueueing policy evaluation for ${patchSetIds.length} patch set(s)`);
     }
 
+    // Special handling for policy -> pr transition
+    // PR stage needs apply_patches jobs for each patch set that passed policy
+    if (event.nextStage === 'pr') {
+      // Use proposed patch sets (they passed policy if we got here)
+      const patchSetIds = ctx.patchSetsNeedingApproval?.length
+        ? ctx.patchSetsNeedingApproval
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      if (patchSetIds.length === 0) {
+        return result(current, [], `Stage ${event.stage} approved, no patch sets to apply`);
+      }
+
+      const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+        queue: 'workflow',
+        name: 'apply_patches',
+        payload: { workflowId: ctx.workflowId, patchSetId }
+      }));
+      return result(current, jobs, `Stage ${event.stage} approved, enqueueing apply_patches for ${patchSetIds.length} patch set(s)`);
+    }
+
     const nextStageJobs = getJobsForStage(event.nextStage, ctx.workflowId);
     return result(current, nextStageJobs, `Stage ${event.stage} approved, advancing to ${event.nextStage}`);
   }
