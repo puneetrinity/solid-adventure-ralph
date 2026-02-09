@@ -20,8 +20,8 @@ COPY packages/db/package.json ./packages/db/
 # Copy prisma schema
 COPY prisma ./prisma
 
-# Install dependencies - cache bust 20260208v2
-RUN npm ci --workspaces --include-workspace-root && echo "deps-20260208v2"
+# Install dependencies (omit devDependencies for production)
+RUN npm ci --workspaces --include-workspace-root --omit=dev
 
 # Copy source
 COPY packages ./packages
