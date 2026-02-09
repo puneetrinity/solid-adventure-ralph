@@ -303,6 +303,28 @@ export function transition(
 
   // Stage approval - triggers next stage's processor
   if (event.type === 'E_STAGE_APPROVED') {
+    // Special handling for patches -> policy transition
+    // Policy stage needs evaluate_policy jobs for each patch set
+    if (event.nextStage === 'policy') {
+      const patchSetIds = ctx.patchSetsNeedingPolicy?.length
+        ? ctx.patchSetsNeedingPolicy
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      if (patchSetIds.length === 0) {
+        // No patch sets to evaluate - skip to ready state
+        return result(current, [], `Stage ${event.stage} approved, no patch sets need policy evaluation`);
+      }
+
+      const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+        queue: 'workflow',
+        name: 'evaluate_policy',
+        payload: { workflowId: ctx.workflowId, patchSetId }
+      }));
+      return result(current, jobs, `Stage ${event.stage} approved, enqueueing policy evaluation for ${patchSetIds.length} patch set(s)`);
+    }
+
     const nextStageJobs = getJobsForStage(event.nextStage, ctx.workflowId);
     return result(current, nextStageJobs, `Stage ${event.stage} approved, advancing to ${event.nextStage}`);
   }
