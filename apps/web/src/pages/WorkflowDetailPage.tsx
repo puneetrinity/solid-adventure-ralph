@@ -208,6 +208,19 @@ export function WorkflowDetailPage() {
     }
   };
 
+  const handleStageRetry = async () => {
+    if (!workflow || !workflow.stage) return;
+    setStageActionLoading(true);
+    try {
+      await api.workflows.requestStageChanges(workflow.id, workflow.stage, 'Retry stage');
+      await refetch();
+    } catch (err) {
+      console.error('Failed to retry stage:', err);
+    } finally {
+      setStageActionLoading(false);
+    }
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
@@ -461,6 +474,7 @@ export function WorkflowDetailPage() {
           onApprove={handleStageApprove}
           onReject={() => setShowStageRejectModal(true)}
           onRequestChanges={() => setShowStageChangesModal(true)}
+          onRetry={handleStageRetry}
           isLoading={stageActionLoading}
         />
       )}
@@ -1889,6 +1903,7 @@ function StagePipeline({
   onApprove,
   onReject,
   onRequestChanges,
+  onRetry,
   isLoading,
 }: {
   stage: GatedStage;
@@ -1896,11 +1911,13 @@ function StagePipeline({
   onApprove: () => void;
   onReject: () => void;
   onRequestChanges: () => void;
+  onRetry: () => void;
   isLoading: boolean;
 }) {
   const currentIndex = STAGES.findIndex(s => s.key === stage);
   const isTerminal = stage === 'done' || stageStatus === 'rejected';
   const canTakeAction = stageStatus === 'ready' && !isLoading;
+  const canRetry = (stageStatus === 'needs_changes' || stageStatus === 'blocked') && !isLoading;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -1973,6 +1990,9 @@ function StagePipeline({
               {stageStatus === 'needs_changes' && (
                 <MessageSquare className="h-5 w-5 text-orange-500" />
               )}
+              {stageStatus === 'blocked' && (
+                <AlertCircle className="h-5 w-5 text-orange-500" />
+              )}
               {stageStatus === 'pending' && (
                 <Clock className="h-5 w-5 text-gray-400" />
               )}
@@ -1986,17 +2006,20 @@ function StagePipeline({
                   {stageStatus === 'ready' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} analysis ready for review`}
                   {stageStatus === 'processing' && `Running ${stage} analysis...`}
                   {stageStatus === 'needs_changes' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage needs changes`}
+                  {stageStatus === 'blocked' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage blocked`}
                   {stageStatus === 'pending' && `Waiting to start ${stage} stage`}
                 </h3>
                 <p className={`text-sm ${
                   stageStatus === 'ready' ? 'text-yellow-700' :
                   stageStatus === 'processing' ? 'text-blue-700' :
                   stageStatus === 'needs_changes' ? 'text-orange-700' :
+                  stageStatus === 'blocked' ? 'text-orange-700' :
                   'text-gray-500'
                 }`}>
                   {stageStatus === 'ready' && 'Review the analysis and approve to proceed to the next stage.'}
                   {stageStatus === 'processing' && 'Please wait while the analysis is being generated.'}
-                  {stageStatus === 'needs_changes' && 'The analysis is being re-run with your feedback.'}
+                  {stageStatus === 'needs_changes' && 'Update feedback or retry the stage to re-run the analysis.'}
+                  {stageStatus === 'blocked' && 'This stage was blocked due to an error. Retry to re-run the analysis.'}
                   {stageStatus === 'pending' && 'The previous stage needs to be approved first.'}
                 </p>
               </div>
@@ -2032,6 +2055,19 @@ function StagePipeline({
                     <CheckCircle className="h-4 w-4" />
                   )}
                   Approve
+                </button>
+              </div>
+            )}
+
+            {canRetry && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onRetry}
+                  disabled={isLoading}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-orange-700 border border-orange-300 rounded-md hover:bg-orange-100 disabled:opacity-50"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  Retry Stage
                 </button>
               </div>
             )}

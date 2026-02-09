@@ -258,6 +258,21 @@ export class IngestContextProcessor extends WorkerHost {
     } catch (error: any) {
       this.logger.error(`Ingest context failed: ${error?.message ?? error}`);
 
+      if (workflow.stage === 'patches') {
+        try {
+          await this.prisma.workflow.update({
+            where: { id: workflowId },
+            data: {
+              stageStatus: 'needs_changes',
+              stageUpdatedAt: new Date(),
+              feedback: String(error?.message ?? error)
+            }
+          });
+        } catch (updateErr) {
+          this.logger.warn(`Failed to update workflow stageStatus on error: ${updateErr}`);
+        }
+      }
+
       // Record run failure
       await this.runRecorder.failRun({
         runId,
@@ -473,119 +488,191 @@ export class IngestContextProcessor extends WorkerHost {
       });
 
       if (response.success && response.rawContent) {
-        try {
-          let jsonContent = response.rawContent.trim();
-          if (jsonContent.startsWith('```')) {
-            jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
-          }
-          const rawParsed = JSON.parse(jsonContent);
-          const parsed = this.validateLLMResponse(rawParsed);
+        const parsed = await this.parseOrRetryLLMResponse(response.rawContent, llmRunner, workflowId, repoOwner, repoName);
+        if (!parsed) {
+          throw new Error(`LLM response invalid after retry for ${repoOwner}/${repoName}`);
+        }
 
-          if (!parsed) {
-            this.logger.warn(`Invalid LLM response structure for ${repoOwner}/${repoName}`);
-          } else {
-            patchTitle = parsed.title || patchTitle;
-            patchSummary = parsed.summary || patchSummary;
+        patchTitle = parsed.title || patchTitle;
+        patchSummary = parsed.summary || patchSummary;
 
-            if (parsed.files && parsed.files.length > 0) {
-              const diffs: string[] = [];
+        if (parsed.files && parsed.files.length > 0) {
+          const diffs: string[] = [];
 
-              for (const fileChange of parsed.files) {
-                const action = fileChange.action || 'modify';
-                let oldContent = '';
-                let oldLines: string[] = [];
-                let newLines: string[] = [];
+          for (const fileChange of parsed.files) {
+            const action = fileChange.action || 'modify';
+            let oldContent = '';
+            let oldLines: string[] = [];
+            let newLines: string[] = [];
 
-                // For modify/delete, we need the existing content
-                if (action === 'modify' || action === 'delete') {
-                  // Check if it's one of our pre-fetched files
-                  if (fileChange.path === 'README.md') {
-                    oldContent = readmeContent;
-                  } else if (fileChange.path === 'package.json') {
-                    oldContent = packageJson;
-                  } else {
-                    // Fetch from GitHub
-                    try {
-                      const file = await this.github.getFileContents({
-                        owner: repoOwner,
-                        repo: repoName,
-                        path: fileChange.path,
-                        ref: baseSha
-                      });
-                      oldContent = file.content;
-                      this.logger.log(`Fetched ${fileChange.path} for diff generation`);
-                    } catch {
-                      if (action === 'delete') {
-                        this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
-                        continue;
-                      }
-                      this.logger.warn(`Could not fetch ${fileChange.path}, treating as new file`);
-                    }
-                  }
-                  oldLines = oldContent ? oldContent.split('\n') : [];
-                }
-
-                // For create/modify, we need new content
-                if (action !== 'delete') {
-                  if (!fileChange.content) {
-                    this.logger.warn(`Missing content for ${action} action on ${fileChange.path}, skipping`);
+            // For modify/delete, we need the existing content
+            if (action === 'modify' || action === 'delete') {
+              // Check if it's one of our pre-fetched files
+              if (fileChange.path === 'README.md') {
+                oldContent = readmeContent;
+              } else if (fileChange.path === 'package.json') {
+                oldContent = packageJson;
+              } else {
+                // Fetch from GitHub
+                try {
+                  const file = await this.github.getFileContents({
+                    owner: repoOwner,
+                    repo: repoName,
+                    path: fileChange.path,
+                    ref: baseSha
+                  });
+                  oldContent = file.content;
+                  this.logger.log(`Fetched ${fileChange.path} for diff generation`);
+                } catch {
+                  if (action === 'delete') {
+                    this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
                     continue;
                   }
-                  newLines = fileChange.content.split('\n');
-                }
-
-                // Determine effective action based on what we found
-                let effectiveAction = action;
-                if (action === 'modify' && oldLines.length === 0) {
-                  effectiveAction = 'create';
-                }
-
-                const fileDiff = this.generateDiff(fileChange.path, oldLines, newLines, effectiveAction);
-                diffs.push(fileDiff);
-
-                // Calculate additions/deletions
-                const additions = action === 'delete' ? 0 : newLines.length;
-                const deletions = action === 'create' ? 0 : oldLines.length;
-                files.push({ path: fileChange.path, additions, deletions });
-
-                // Check if this is a test file
-                if (fileChange.path.includes('test') || fileChange.path.includes('spec') || fileChange.path.includes('__tests__')) {
-                  addsTests = true;
+                  this.logger.warn(`Could not fetch ${fileChange.path}, treating as new file`);
                 }
               }
+              oldLines = oldContent ? oldContent.split('\n') : [];
+            }
 
-              if (diffs.length > 0) {
-                patchDiff = diffs.join('\n\n');
-                this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
+            // For create/modify, we need new content
+            if (action !== 'delete') {
+              if (!fileChange.content) {
+                this.logger.warn(`Missing content for ${action} action on ${fileChange.path}, skipping`);
+                continue;
               }
+              newLines = fileChange.content.split('\n');
+            }
+
+            // Determine effective action based on what we found
+            let effectiveAction = action;
+            if (action === 'modify' && oldLines.length === 0) {
+              effectiveAction = 'create';
+            }
+
+            const fileDiff = this.generateDiff(fileChange.path, oldLines, newLines, effectiveAction);
+            diffs.push(fileDiff);
+
+            // Calculate additions/deletions
+            const additions = action === 'delete' ? 0 : newLines.length;
+            const deletions = action === 'create' ? 0 : oldLines.length;
+            files.push({ path: fileChange.path, additions, deletions });
+
+            // Check if this is a test file
+            if (fileChange.path.includes('test') || fileChange.path.includes('spec') || fileChange.path.includes('__tests__')) {
+              addsTests = true;
             }
           }
-        } catch (parseErr) {
-          this.logger.warn(`Failed to parse LLM response for ${repoOwner}/${repoName}: ${parseErr}`);
+
+          if (diffs.length > 0) {
+            patchDiff = diffs.join('\n\n');
+            this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
+          }
         }
       } else {
         this.logger.warn(`LLM call failed for ${repoOwner}/${repoName}: ${response.error}`);
       }
     } else {
-      this.logger.warn('GROQ_API_KEY not set, using stub patch');
+      this.logger.warn('GROQ_API_KEY not set, cannot generate patches');
     }
 
-    // Fallback to stub diff if LLM didn't produce one
+    // Block progression if LLM didn't produce a usable diff
     if (!patchDiff) {
-      patchDiff = [
-        'diff --git a/README.md b/README.md',
-        'index 0000000..1111111 100644',
-        '--- a/README.md',
-        '+++ b/README.md',
-        '@@ -1 +1,2 @@',
-        ` ${readmeContent?.split('\n')[0] || '# Project'}`,
-        '+',
-        '+This project is managed by arch-orchestrator.'
-      ].join('\n');
-      files = [{ path: 'README.md', additions: 2, deletions: 0 }];
+      throw new Error(`No valid patch diff generated for ${repoOwner}/${repoName}`);
     }
 
     return { patchTitle, patchSummary, patchDiff, files, addsTests };
+  }
+
+  private async parseOrRetryLLMResponse(
+    raw: string,
+    llmRunner: LLMRunner,
+    workflowId: string,
+    repoOwner: string,
+    repoName: string
+  ): Promise<LLMPatchResponse | null> {
+    const initial = this.tryParseLLMResponse(raw);
+    if (initial.parsed) {
+      return initial.parsed;
+    }
+
+    this.logger.warn(`LLM response parse failed for ${repoOwner}/${repoName}, retrying with strict JSON request`);
+
+    const retryPrompt = [
+      'Your previous response was invalid JSON.',
+      'Return ONLY a valid JSON object with the exact schema below. No markdown, no commentary.',
+      '',
+      '{',
+      '  "title": "Short title for the change (max 50 chars)",',
+      '  "summary": "Brief description of what this change does",',
+      '  "files": [',
+      '    {',
+      '      "path": "relative/path/to/file.ts",',
+      '      "action": "create" | "modify" | "delete",',
+      '      "content": "complete new file content (not needed for delete)"',
+      '    }',
+      '  ]',
+      '}',
+      '',
+      'Here is your previous output. Fix it into valid JSON:',
+      raw
+    ].join('\n');
+
+    const retryResponse = await llmRunner.run('coder', retryPrompt, {
+      context: { workflowId }
+    });
+
+    if (!retryResponse.success || !retryResponse.rawContent) {
+      this.logger.warn(`LLM retry failed for ${repoOwner}/${repoName}: ${retryResponse.error}`);
+      return null;
+    }
+
+    const retried = this.tryParseLLMResponse(retryResponse.rawContent);
+    if (!retried.parsed) {
+      this.logger.warn(`LLM retry response still invalid for ${repoOwner}/${repoName}: ${retried.error}`);
+      return null;
+    }
+
+    return retried.parsed;
+  }
+
+  private tryParseLLMResponse(raw: string): { parsed: LLMPatchResponse | null; error?: string } {
+    try {
+      let jsonContent = this.extractJsonBlock(raw);
+      if (!jsonContent) {
+        return { parsed: null, error: 'No JSON object found' };
+      }
+      jsonContent = this.sanitizeJsonString(jsonContent);
+      const rawParsed = JSON.parse(jsonContent);
+      const parsed = this.validateLLMResponse(rawParsed);
+      if (!parsed) {
+        return { parsed: null, error: 'Invalid response structure' };
+      }
+      return { parsed };
+    } catch (err: any) {
+      return { parsed: null, error: String(err?.message ?? err) };
+    }
+  }
+
+  private extractJsonBlock(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('```')) {
+      const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      if (fenceMatch && fenceMatch[1]) {
+        return fenceMatch[1].trim();
+      }
+    }
+
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return trimmed.slice(start, end + 1);
+    }
+
+    return null;
+  }
+
+  private sanitizeJsonString(input: string): string {
+    return input.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
   }
 
   private buildDecisionArtifact(
