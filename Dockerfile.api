@@ -1,10 +1,5 @@
-# API Dockerfile
-FROM node:20-bullseye-slim
-
-# Install OpenSSL (Prisma on Debian)
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+# API Dockerfile - Multi-stage build
+FROM node:20-bullseye-slim AS builder
 
 WORKDIR /app
 
@@ -20,20 +15,53 @@ COPY packages/db/package.json ./packages/db/
 # Copy prisma schema
 COPY prisma ./prisma
 
-# Install dependencies (omit devDependencies for production)
-RUN npm ci --workspaces --include-workspace-root --omit=dev
+# Install ALL dependencies (including devDependencies for build)
+RUN npm ci --workspaces --include-workspace-root
 
 # Copy source
 COPY packages ./packages
 COPY apps/api ./apps/api
 
-# Generate Prisma client (needs schema types before TS build)
+# Generate Prisma client
 RUN DATABASE_URL=postgresql://user:pass@localhost:5432/db npx prisma generate
 
 # Build
 RUN npm run build -w packages/db -w packages/core -w apps/api
 
+# ============================================
+# Production stage
+# ============================================
+FROM node:20-bullseye-slim
+
+# Install OpenSSL (Prisma on Debian)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/worker/package.json ./apps/worker/
+COPY apps/web/package.json ./apps/web/
+COPY packages/core/package.json ./packages/core/
+COPY packages/db/package.json ./packages/db/
+
+# Copy prisma schema
+COPY prisma ./prisma
+
+# Install production dependencies only
+RUN npm ci --workspaces --include-workspace-root --omit=dev
+
+# Generate Prisma client in production
+RUN DATABASE_URL=postgresql://user:pass@localhost:5432/db npx prisma generate
+
+# Copy built files from builder
+COPY --from=builder /app/packages/core/dist ./packages/core/dist
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/apps/api/dist ./apps/api/dist
+
 EXPOSE 3000
 
 CMD ["npm", "run", "start:api"]
-# Cache bust openssl3-fix

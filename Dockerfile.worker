@@ -1,11 +1,5 @@
-# Worker Dockerfile
-FROM node:20-bullseye-slim
-
-# Install bash + OpenSSL (Prisma on Debian) - bust cache 20260208v3
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends bash openssl ca-certificates \
-  && rm -rf /var/lib/apt/lists/* \
-  && echo "cache-bust-20260208v3"
+# Worker Dockerfile - Multi-stage build
+FROM node:20-bullseye-slim AS builder
 
 WORKDIR /app
 
@@ -21,18 +15,52 @@ COPY packages/db/package.json ./packages/db/
 # Copy prisma schema
 COPY prisma ./prisma
 
-# Install dependencies (omit devDependencies for production)
-RUN npm ci --workspaces --include-workspace-root --omit=dev
+# Install ALL dependencies (including devDependencies for build)
+RUN npm ci --workspaces --include-workspace-root
 
 # Copy source
 COPY packages ./packages
 COPY apps/worker ./apps/worker
 
-# Generate Prisma client (needs schema types before TS build)
+# Generate Prisma client
 RUN DATABASE_URL=postgresql://user:pass@localhost:5432/db npx prisma generate
 
 # Build
 RUN npm run build -w packages/db -w packages/core -w apps/worker
+
+# ============================================
+# Production stage
+# ============================================
+FROM node:20-bullseye-slim
+
+# Install bash + OpenSSL (Prisma on Debian)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends bash openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY apps/api/package.json ./apps/api/
+COPY apps/worker/package.json ./apps/worker/
+COPY apps/web/package.json ./apps/web/
+COPY packages/core/package.json ./packages/core/
+COPY packages/db/package.json ./packages/db/
+
+# Copy prisma schema
+COPY prisma ./prisma
+
+# Install production dependencies only
+RUN npm ci --workspaces --include-workspace-root --omit=dev
+
+# Generate Prisma client in production
+RUN DATABASE_URL=postgresql://user:pass@localhost:5432/db npx prisma generate
+
+# Copy built files from builder
+COPY --from=builder /app/packages/core/dist ./packages/core/dist
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
 
 # Copy start script
 COPY start-worker.sh /app/start.sh
