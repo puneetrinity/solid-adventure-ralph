@@ -217,6 +217,43 @@ export const api = {
         permissions: { admin?: boolean; push?: boolean; pull?: boolean };
       }>>(`/api/auth/github/repos${qs(params)}`),
   },
+
+  repos: {
+    getContext: (owner: string, repo: string, branch?: string) =>
+      fetchJson<{
+        status: 'fresh' | 'stale' | 'missing';
+        context: {
+          id: string;
+          repoOwner: string;
+          repoName: string;
+          baseBranch: string;
+          baseSha: string | null;
+          contextPath: string;
+          summary: string | null;
+          isStale: boolean;
+          updatedAt: string;
+        } | null;
+      }>(`/api/repos/context${qs({ owner, repo, branch })}`),
+
+    refreshContext: (owner: string, repo: string, branch?: string) =>
+      fetchJson<{ ok: boolean; jobId: string; message: string }>(
+        `/api/repos/context/refresh${qs({ owner, repo, branch })}`,
+        { method: 'POST' }
+      ),
+
+    listContexts: (owner?: string) =>
+      fetchJson<Array<{
+        id: string;
+        repoOwner: string;
+        repoName: string;
+        baseBranch: string;
+        baseSha: string | null;
+        contextPath: string;
+        summary: string | null;
+        isStale: boolean;
+        updatedAt: string;
+      }>>(`/api/repos/contexts${qs({ owner })}`),
+  },
 };
 
 export { ApiClientError, fetchJson };

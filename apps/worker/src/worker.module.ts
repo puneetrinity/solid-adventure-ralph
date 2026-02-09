@@ -5,6 +5,7 @@ import { IngestContextProcessor } from './processors/ingest-context.processor';
 import { ApplyPatchesProcessor } from './processors/apply-patches.processor';
 import { EvaluatePolicyProcessor } from './processors/evaluate-policy.processor';
 import { OrchestrateProcessor } from './processors/orchestrate.processor';
+import { RefreshContextProcessor } from './processors/refresh-context.processor';
 import { OrchestratorService } from './orchestrator/orchestrator.service';
 import { StubGitHubClient, type GitHubClient } from '@arch-orchestrator/core';
 import { Octokit } from '@octokit/rest';
@@ -123,7 +124,8 @@ function createGitHubClient(): GitHubClient {
     BullModule.registerQueue({ name: 'orchestrate' }),
     BullModule.registerQueue({ name: 'ingest_context' }),
     BullModule.registerQueue({ name: 'apply_patches' }),
-    BullModule.registerQueue({ name: 'evaluate_policy' })
+    BullModule.registerQueue({ name: 'evaluate_policy' }),
+    BullModule.registerQueue({ name: 'refresh_context' })
   ],
   providers: [
     // Orchestrator (Phase 3)
@@ -134,6 +136,7 @@ function createGitHubClient(): GitHubClient {
     IngestContextProcessor,
     ApplyPatchesProcessor,
     EvaluatePolicyProcessor,
+    RefreshContextProcessor,
 
     // GitHub client - real when GITHUB_TOKEN is set, stub otherwise
     {

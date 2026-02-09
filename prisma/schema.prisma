@@ -67,6 +67,23 @@ model GitHubAuth {
   @@index([username])
 }
 
+model RepoContext {
+  id          String   @id @default(uuid())
+  repoOwner   String
+  repoName    String
+  baseBranch  String   @default("main")
+  baseSha     String?  // SHA when context was fetched
+  contextPath String   @default("PROJECT_CONTEXT.md") // or AGENTS.md
+  content     String?  // Full content of the context file
+  summary     String?  // LLM-generated summary
+  isStale     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([repoOwner, repoName, baseBranch])
+  @@index([repoOwner, repoName])
+}
+
 model WorkflowEvent {
   id         String   @id @default(uuid())
   workflowId String

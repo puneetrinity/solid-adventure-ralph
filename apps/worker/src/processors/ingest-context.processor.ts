@@ -23,6 +23,10 @@ interface RepoContext {
   readmeContent: string;
   packageJson: string;
   baseSha: string;
+  // Stored project context (from RepoContext table)
+  storedContextSummary?: string;
+  storedContextContent?: string;
+  storedContextPath?: string;
 }
 
 @Processor('ingest_context')
@@ -228,7 +232,31 @@ export class IngestContextProcessor extends WorkerHost {
     const baseSha = branch.sha;
     this.logger.log(`${owner}/${repo} base SHA: ${baseSha}`);
 
-    // Fetch README.md
+    // Check for stored project context first
+    let storedContextSummary: string | undefined;
+    let storedContextContent: string | undefined;
+    let storedContextPath: string | undefined;
+
+    try {
+      const storedContext = await this.prisma.repoContext.findUnique({
+        where: {
+          repoOwner_repoName_baseBranch: { repoOwner: owner, repoName: repo, baseBranch }
+        }
+      });
+
+      if (storedContext && !storedContext.isStale) {
+        storedContextSummary = storedContext.summary || undefined;
+        storedContextContent = storedContext.content || undefined;
+        storedContextPath = storedContext.contextPath;
+        this.logger.log(`${owner}/${repo}: Using stored context from ${storedContextPath} (summary: ${storedContextSummary?.length || 0} chars)`);
+      } else if (storedContext?.isStale) {
+        this.logger.warn(`${owner}/${repo}: Stored context is stale, will fallback to README`);
+      }
+    } catch (err) {
+      this.logger.warn(`${owner}/${repo}: Failed to fetch stored context: ${err}`);
+    }
+
+    // Fetch README.md (always as fallback or supplementary)
     let readmeContent = '';
     try {
       const readme = await this.github.getFileContents({ owner, repo, path: 'README.md', ref: baseSha });
@@ -248,7 +276,14 @@ export class IngestContextProcessor extends WorkerHost {
       // package.json is optional
     }
 
-    return { readmeContent, packageJson, baseSha };
+    return {
+      readmeContent,
+      packageJson,
+      baseSha,
+      storedContextSummary,
+      storedContextContent,
+      storedContextPath
+    };
   }
 
   private async generatePatch(
@@ -259,7 +294,7 @@ export class IngestContextProcessor extends WorkerHost {
     groqProvider: ReturnType<typeof createGroqProvider>
   ): Promise<{ patchTitle: string; patchSummary: string; patchDiff: string }> {
     const { owner: repoOwner, repo: repoName } = repoConfig;
-    const { readmeContent, packageJson } = repoContext;
+    const { readmeContent, packageJson, storedContextSummary, storedContextPath } = repoContext;
 
     let patchTitle = workflow.goal?.substring(0, 50) || 'Code change';
     let patchSummary = workflow.goal || 'Implement requested changes';
@@ -271,14 +306,26 @@ export class IngestContextProcessor extends WorkerHost {
 
       const promptParts = [
         `You are an expert software engineer. Your task is to implement the following request.`,
-        ``,
-        `## Goal`,
-        workflow.goal || 'Improve the codebase',
         ``
       ];
 
+      // Include stored project context summary if available
+      if (storedContextSummary) {
+        promptParts.push(
+          `## Project Context (from ${storedContextPath})`,
+          storedContextSummary,
+          ``
+        );
+      }
+
+      promptParts.push(
+        `## Goal`,
+        workflow.goal || 'Improve the codebase',
+        ``
+      );
+
       if (workflow.context) {
-        promptParts.push(`## Context`, workflow.context, ``);
+        promptParts.push(`## Additional Context`, workflow.context, ``);
       }
 
       if (workflow.feedback) {
