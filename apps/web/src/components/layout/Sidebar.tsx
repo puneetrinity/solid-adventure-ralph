@@ -7,8 +7,8 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { to: '/repos', icon: FolderGit2, label: 'Repositories' },
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/repos', icon: FolderGit2, label: 'Repositories' },
   { to: '/workflows', icon: GitBranch, label: 'Workflows' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

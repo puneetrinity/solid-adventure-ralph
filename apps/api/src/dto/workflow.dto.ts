@@ -133,6 +133,12 @@ export class WorkflowResponseDto {
   @ApiPropertyOptional({ example: 'Add dark mode feature' })
   title?: string;
 
+  @ApiPropertyOptional({ example: 'Add user authentication with OAuth support' })
+  featureGoal?: string;
+
+  @ApiPropertyOptional({ example: 'Users need secure login. Current system has no authentication.' })
+  businessJustification?: string;
+
   @ApiPropertyOptional({ example: 'Add a dark mode toggle to the settings page' })
   goal?: string;
 
@@ -162,6 +168,12 @@ export class WorkflowResponseDto {
 
   @ApiPropertyOptional({ type: [RepoInput], description: 'Associated repositories' })
   repos?: RepoInput[];
+
+  @ApiPropertyOptional({ example: 'feasibility' })
+  stage?: string;
+
+  @ApiPropertyOptional({ example: 'ready' })
+  stageStatus?: string;
 }
 
 export class PaginationDto {
