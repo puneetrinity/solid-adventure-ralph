@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@core": ["packages/core/src/index"],
+      "@core/*": ["packages/core/src/*"],
+      "@db": ["packages/db/src/index"],
+      "@db/*": ["packages/db/src/*"],
+      "@arch-orchestrator/core": ["packages/core/src/index"],
+      "@arch-orchestrator/core/*": ["packages/core/src/*"],
+      "@arch-orchestrator/db": ["packages/db/src/index"],
+      "@arch-orchestrator/db/*": ["packages/db/src/*"]
+    }
+  },
+  "include": [
+    "test/**/*.ts",
+    "packages/*/src/**/*.ts"
+  ]
+}
