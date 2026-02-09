@@ -27,8 +27,14 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Build Packages
+        run: npm run build --workspace=packages/core --workspace=packages/db
+
+      - name: Typecheck API
+        run: npm run typecheck --workspace=apps/api
+
+      - name: Typecheck Worker
+        run: npm run typecheck --workspace=apps/worker
 
   unit-tests:
     name: Unit Tests
@@ -46,6 +52,9 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Build Packages
+        run: npm run build --workspace=packages/core --workspace=packages/db
+
       - name: Run Unit Tests
         run: npm run test:unit -- --coverage
 
@@ -59,7 +68,6 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    # Only run on main branch (not PRs) to avoid exposing secrets
     if: github.ref == 'refs/heads/main'
     needs: [lint-and-typecheck, unit-tests]
     steps:
@@ -74,6 +82,9 @@ jobs:
 
       - name: Generate Prisma Client
         run: npx prisma generate
+
+      - name: Build Packages
+        run: npm run build --workspace=packages/core --workspace=packages/db
 
       - name: Run Integration Tests
         env:
