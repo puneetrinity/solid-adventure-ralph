@@ -92,7 +92,7 @@ ${content}`;
 
           try {
             const response = await llmRunner.run('documenter', prompt, {
-              budget: { maxInputTokens: 50000, maxOutputTokens: 1000, maxTotalCost: 10 },
+              budget: { maxInputTokens: 50000, maxOutputTokens: 1000, maxTotalCost: 50 },
             });
 
             if (response.success && response.rawContent) {

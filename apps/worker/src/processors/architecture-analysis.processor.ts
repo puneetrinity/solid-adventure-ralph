@@ -155,7 +155,7 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
 
         const response = await llmRunner.run('architect', prompt, {
           context: { workflowId },
-          budget: { maxInputTokens: 50000, maxOutputTokens: 3000, maxTotalCost: 10 }
+          budget: { maxInputTokens: 50000, maxOutputTokens: 3000, maxTotalCost: 50 }
         });
 
         if (response.success && response.rawContent) {
