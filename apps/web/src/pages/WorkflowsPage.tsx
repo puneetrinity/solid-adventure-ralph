@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { RefreshCw, AlertCircle, Inbox, Plus, X } from 'lucide-react';
+import { RefreshCw, AlertCircle, Inbox, Plus, X, GitBranch, Star } from 'lucide-react';
 import { useWorkflows } from '../hooks/use-workflows';
 import { WorkflowStatusBadge } from '../components/workflow';
 import { Modal, Toast, useToast } from '../components/ui';
@@ -14,8 +14,20 @@ interface RepoEntry {
   role: 'primary' | 'secondary';
 }
 
+// Get stored repo filter from localStorage
+function getStoredRepoFilter(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('repoFilter') || '';
+}
+
+function setStoredRepoFilter(filter: string) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('repoFilter', filter);
+}
+
 export function WorkflowsPage() {
   const [statusFilter, setStatusFilter] = useState('');
+  const [repoFilter, setRepoFilter] = useState(getStoredRepoFilter);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   // New fields
@@ -29,10 +41,35 @@ export function WorkflowsPage() {
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
+
+  // Parse repo filter for API params
+  const [repoOwner, repoName] = repoFilter ? repoFilter.split('/') : [undefined, undefined];
+
   const { workflows, isLoading, error, nextCursor, refetch, loadMore } = useWorkflows({
     status: statusFilter || undefined,
+    repoOwner,
+    repoName,
   });
   const { toast, showToast, hideToast } = useToast();
+
+  // Update stored filter when changed
+  const handleRepoFilterChange = (value: string) => {
+    setRepoFilter(value);
+    setStoredRepoFilter(value);
+  };
+
+  // Collect unique repos from workflows for filter dropdown
+  const uniqueRepos = useMemo(() => {
+    const repos = new Set<string>();
+    workflows.forEach(w => {
+      if (w.repos) {
+        w.repos.forEach(r => repos.add(`${r.owner}/${r.repo}`));
+      } else if (w.repoOwner && w.repoName) {
+        repos.add(`${w.repoOwner}/${w.repoName}`);
+      }
+    });
+    return Array.from(repos).sort();
+  }, [workflows]);
 
   // Client-side filter by ID substring
   const filteredWorkflows = useMemo(() => {
@@ -209,6 +246,21 @@ export function WorkflowsPage() {
         <div className="flex flex-wrap gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
+              Repository
+            </label>
+            <select
+              value={repoFilter}
+              onChange={e => handleRepoFilterChange(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-md text-sm min-w-[200px]"
+            >
+              <option value="">All Repositories</option>
+              {uniqueRepos.map(repo => (
+                <option key={repo} value={repo}>{repo}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               Status
             </label>
             <select
@@ -282,13 +334,13 @@ export function WorkflowsPage() {
                   ID
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Repositories
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   State
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Created
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Base SHA
                 </th>
               </tr>
             </thead>
@@ -302,15 +354,43 @@ export function WorkflowsPage() {
                     >
                       {workflow.id.substring(0, 8)}...
                     </Link>
+                    {workflow.title && (
+                      <p className="text-xs text-gray-500 truncate max-w-[200px]">{workflow.title}</p>
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex flex-wrap gap-1">
+                      {workflow.repos && workflow.repos.length > 0 ? (
+                        workflow.repos.map(repo => (
+                          <span
+                            key={repo.id}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-mono ${
+                              repo.role === 'primary'
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-gray-100 text-gray-600'
+                            }`}
+                          >
+                            {repo.role === 'primary' && <Star className="h-3 w-3" />}
+                            <GitBranch className="h-3 w-3" />
+                            {repo.owner}/{repo.repo}
+                          </span>
+                        ))
+                      ) : workflow.repoOwner && workflow.repoName ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-mono bg-blue-100 text-blue-700">
+                          <Star className="h-3 w-3" />
+                          <GitBranch className="h-3 w-3" />
+                          {workflow.repoOwner}/{workflow.repoName}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">-</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <WorkflowStatusBadge state={workflow.state} />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {formatDate(workflow.createdAt)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500">
-                    {shortenSha(workflow.baseSha ?? null)}
                   </td>
                 </tr>
               ))}

@@ -23,15 +23,19 @@ export class WorkflowsController {
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max items to return (1-100)', example: 20 })
   @ApiQuery({ name: 'cursor', required: false, type: String, description: 'Pagination cursor' })
   @ApiQuery({ name: 'status', required: false, type: String, description: 'Filter by status', example: 'WAITING_USER_APPROVAL' })
+  @ApiQuery({ name: 'repoOwner', required: false, type: String, description: 'Filter by repo owner' })
+  @ApiQuery({ name: 'repoName', required: false, type: String, description: 'Filter by repo name' })
   @ApiResponse({ status: 200, description: 'List of workflows', type: PaginatedWorkflowsResponseDto })
   async listWorkflows(
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
-    @Query('status') status?: string
+    @Query('status') status?: string,
+    @Query('repoOwner') repoOwner?: string,
+    @Query('repoName') repoName?: string
   ) {
     const parsedLimit = limit ? parseInt(limit, 10) : 20;
     const safeLimit = Math.min(Math.max(1, parsedLimit || 20), 100);
-    return this.workflows.list({ limit: safeLimit, cursor, status });
+    return this.workflows.list({ limit: safeLimit, cursor, status, repoOwner, repoName });
   }
 
   @Post()

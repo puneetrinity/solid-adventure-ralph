@@ -100,6 +100,8 @@ interface WorkflowListParams {
   limit?: number;
   cursor?: string;
   status?: string;
+  repoOwner?: string;
+  repoName?: string;
   [key: string]: string | number | undefined;
 }
 

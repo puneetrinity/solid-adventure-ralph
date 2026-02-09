@@ -14,10 +14,12 @@ interface UseWorkflowsResult {
 interface UseWorkflowsOptions {
   limit?: number;
   status?: string;
+  repoOwner?: string;
+  repoName?: string;
 }
 
 export function useWorkflows(options: UseWorkflowsOptions = {}): UseWorkflowsResult {
-  const { limit = 20, status } = options;
+  const { limit = 20, status, repoOwner, repoName } = options;
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -28,7 +30,7 @@ export function useWorkflows(options: UseWorkflowsOptions = {}): UseWorkflowsRes
     setError(null);
 
     try {
-      const result = await api.workflows.list({ limit, cursor, status });
+      const result = await api.workflows.list({ limit, cursor, status, repoOwner, repoName });
 
       if (append) {
         setWorkflows(prev => [...prev, ...result.items]);
@@ -41,7 +43,7 @@ export function useWorkflows(options: UseWorkflowsOptions = {}): UseWorkflowsRes
     } finally {
       setIsLoading(false);
     }
-  }, [limit, status]);
+  }, [limit, status, repoOwner, repoName]);
 
   const refetch = useCallback(async () => {
     await fetchWorkflows();

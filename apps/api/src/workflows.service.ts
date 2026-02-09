@@ -7,6 +7,8 @@ interface ListParams {
   limit: number;
   cursor?: string;
   status?: string;
+  repoOwner?: string;
+  repoName?: string;
 }
 
 interface WorkflowListItem {
@@ -18,6 +20,13 @@ interface WorkflowListItem {
   baseBranch: string;
   createdAt: Date;
   baseSha: string | null;
+  repos?: Array<{
+    id: string;
+    owner: string;
+    repo: string;
+    baseBranch: string;
+    role: string;
+  }>;
 }
 
 export interface ListResult {
@@ -35,7 +44,7 @@ export class WorkflowsService {
   ) {}
 
   async list(params: ListParams): Promise<ListResult> {
-    const { limit, cursor, status } = params;
+    const { limit, cursor, status, repoOwner, repoName } = params;
 
     // Build where clause
     const where: Record<string, unknown> = {};
@@ -44,6 +53,21 @@ export class WorkflowsService {
     }
     if (cursor) {
       where.createdAt = { lt: new Date(cursor) };
+    }
+
+    // Filter by repo membership (either primary repo or any repo in workflow)
+    if (repoOwner && repoName) {
+      where.OR = [
+        // Legacy fields match
+        { repoOwner, repoName },
+        // Or any repo in the workflow matches
+        { repos: { some: { owner: repoOwner, repo: repoName } } }
+      ];
+    } else if (repoOwner) {
+      where.OR = [
+        { repoOwner },
+        { repos: { some: { owner: repoOwner } } }
+      ];
     }
 
     // Fetch one extra to determine if there's a next page
@@ -60,6 +84,16 @@ export class WorkflowsService {
         baseBranch: true,
         createdAt: true,
         baseSha: true,
+        repos: {
+          select: {
+            id: true,
+            owner: true,
+            repo: true,
+            baseBranch: true,
+            role: true,
+          },
+          orderBy: { createdAt: 'asc' }
+        }
       },
     });
 
