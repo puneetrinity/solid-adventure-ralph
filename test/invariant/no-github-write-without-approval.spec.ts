@@ -1,6 +1,10 @@
 import { getPrisma } from '@db';
 import { WriteGate, type GitHubClient, StubGitHubClient } from '@core';
 
+// Skip if no DATABASE_URL (CI unit tests don't have DB)
+const hasDatabase = !!process.env.DATABASE_URL;
+const describeWithDb = hasDatabase ? describe : describe.skip;
+
 /**
  * Create a mock GitHubClient that extends StubGitHubClient with jest spies.
  */
@@ -16,11 +20,10 @@ function createMockGitHubClient() {
   } as GitHubClient & { openPullRequest: jest.Mock };
 }
 
-describe('Invariant: no GitHub contents writes without approval', () => {
+describeWithDb('Invariant: no GitHub contents writes without approval', () => {
   const prisma = getPrisma();
 
   beforeAll(async () => {
-    // Ensure DB reachable for tests. In local dev, set DATABASE_URL.
     await prisma.$connect();
   });
 
