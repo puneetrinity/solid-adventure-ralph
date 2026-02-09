@@ -6,6 +6,7 @@ import { ApplyPatchesProcessor } from './processors/apply-patches.processor';
 import { EvaluatePolicyProcessor } from './processors/evaluate-policy.processor';
 import { OrchestrateProcessor } from './processors/orchestrate.processor';
 import { RefreshContextProcessor } from './processors/refresh-context.processor';
+import { FeasibilityAnalysisProcessor } from './processors/feasibility-analysis.processor';
 import { OrchestratorService } from './orchestrator/orchestrator.service';
 import { StubGitHubClient, type GitHubClient } from '@arch-orchestrator/core';
 import { Octokit } from '@octokit/rest';
@@ -145,7 +146,8 @@ function createGitHubClient(): GitHubClient {
     BullModule.registerQueue({ name: 'ingest_context' }),
     BullModule.registerQueue({ name: 'apply_patches' }),
     BullModule.registerQueue({ name: 'evaluate_policy' }),
-    BullModule.registerQueue({ name: 'refresh_context' })
+    BullModule.registerQueue({ name: 'refresh_context' }),
+    BullModule.registerQueue({ name: 'feasibility' })
   ],
   providers: [
     // Orchestrator (Phase 3)
@@ -153,6 +155,7 @@ function createGitHubClient(): GitHubClient {
     OrchestrateProcessor,
 
     // Stage processors
+    FeasibilityAnalysisProcessor,
     IngestContextProcessor,
     ApplyPatchesProcessor,
     EvaluatePolicyProcessor,

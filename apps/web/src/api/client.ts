@@ -165,6 +165,25 @@ export const api = {
         method: 'DELETE',
       }),
 
+    // Stage actions (gated pipeline)
+    approveStage: (id: string, stage: string, reason?: string) =>
+      fetchJson<{ ok: boolean; workflowId: string; stage: string; newStatus: string; decisionId?: string; error?: string }>(
+        `/api/workflows/${id}/stages/${stage}/approve`,
+        { method: 'POST', body: JSON.stringify({ reason }) }
+      ),
+
+    rejectStage: (id: string, stage: string, reason?: string) =>
+      fetchJson<{ ok: boolean; workflowId: string; stage: string; newStatus: string; decisionId?: string; error?: string }>(
+        `/api/workflows/${id}/stages/${stage}/reject`,
+        { method: 'POST', body: JSON.stringify({ reason }) }
+      ),
+
+    requestStageChanges: (id: string, stage: string, reason: string) =>
+      fetchJson<{ ok: boolean; workflowId: string; stage: string; newStatus: string; decisionId?: string; error?: string }>(
+        `/api/workflows/${id}/stages/${stage}/request_changes`,
+        { method: 'POST', body: JSON.stringify({ reason }) }
+      ),
+
     getPatchSets: (id: string) =>
       fetchJson<PatchSet[]>(`/api/workflows/${id}/patch_sets`),
 

@@ -31,10 +31,22 @@ export class RepoInput {
 
 export class CreateWorkflowDto {
   @ApiProperty({
-    description: 'Goal - plain English request or ticket text',
+    description: 'Feature Goal - what the user wants to build (required)',
+    example: 'Add user authentication with OAuth support',
+  })
+  featureGoal!: string;
+
+  @ApiProperty({
+    description: 'Business Justification - why this feature matters (required)',
+    example: 'Users need secure login. Current system has no authentication.',
+  })
+  businessJustification!: string;
+
+  @ApiPropertyOptional({
+    description: 'Goal - plain English request (legacy, use featureGoal)',
     example: 'Add a dark mode toggle to the settings page that persists user preference',
   })
-  goal!: string;
+  goal?: string;
 
   @ApiPropertyOptional({
     description: 'Context - extra info, links, acceptance criteria',
@@ -204,4 +216,33 @@ export class ErrorResponseDto {
 
   @ApiProperty({ example: 'Workflow not found' })
   message!: string;
+}
+
+// Stage action DTOs
+export class StageActionDto {
+  @ApiPropertyOptional({
+    description: 'Reason or feedback for the decision',
+    example: 'Looks good, proceed with implementation',
+  })
+  reason?: string;
+}
+
+export class StageDecisionResponseDto {
+  @ApiProperty({ example: true })
+  ok!: boolean;
+
+  @ApiProperty({ example: 'wf_abc123' })
+  workflowId!: string;
+
+  @ApiProperty({ example: 'feasibility' })
+  stage!: string;
+
+  @ApiProperty({ example: 'approved' })
+  newStatus!: string;
+
+  @ApiPropertyOptional({ example: 'sd_abc123' })
+  decisionId?: string;
+
+  @ApiPropertyOptional({ example: 'Stage not ready for approval' })
+  error?: string;
 }

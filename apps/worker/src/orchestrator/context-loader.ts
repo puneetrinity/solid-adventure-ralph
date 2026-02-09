@@ -115,6 +115,10 @@ export async function loadTransitionContext(
     patchSetsNeedingPolicy,
     patchSetsNeedingApproval,
     approvedPatchSetIds: approvedPatchSets.map(ps => ps.id),
-    allPatchSetsApplied: hasPatchSets && appliedPatchSets.length === patchSets.length
+    allPatchSetsApplied: hasPatchSets && appliedPatchSets.length === patchSets.length,
+
+    // Gated pipeline context
+    currentStage: workflow.stage as any,
+    stageStatus: workflow.stageStatus
   };
 }

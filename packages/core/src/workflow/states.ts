@@ -8,9 +8,17 @@ export type WorkflowState =
   | 'DONE'
   | 'NEEDS_HUMAN'
   | 'BLOCKED_POLICY'
-  | 'FAILED';
+  | 'FAILED'
+  | 'REJECTED'; // User explicitly rejected via stage rejection
 
-export type StageName = 'ingest_context' | 'apply_patches' | 'evaluate_policy';
+// Legacy stage names for job processors
+export type StageName = 'ingest_context' | 'apply_patches' | 'evaluate_policy' | 'feasibility';
+
+// Gated pipeline stage names
+export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'patches' | 'policy' | 'pr' | 'done';
+
+// Stage status for gated pipeline
+export type StageStatus = 'pending' | 'processing' | 'ready' | 'approved' | 'rejected' | 'blocked' | 'needs_changes';
 
 export type WorkflowEventType =
   | 'E_WORKFLOW_CREATED'
@@ -22,7 +30,11 @@ export type WorkflowEventType =
   | 'E_PR_MERGED'
   | 'E_PR_CLOSED'
   | 'E_CHANGES_REQUESTED'
-  | 'E_PATCH_SET_REJECTED';
+  | 'E_PATCH_SET_REJECTED'
+  // Gated pipeline events
+  | 'E_STAGE_APPROVED'
+  | 'E_STAGE_REJECTED'
+  | 'E_STAGE_CHANGES_REQUESTED';
 
 export type TransitionEvent =
   | { type: 'E_WORKFLOW_CREATED' }
@@ -34,9 +46,17 @@ export type TransitionEvent =
   | { type: 'E_PR_MERGED'; prNumber: number }
   | { type: 'E_PR_CLOSED'; prNumber: number }
   | { type: 'E_CHANGES_REQUESTED'; comment?: string }
-  | { type: 'E_PATCH_SET_REJECTED'; reason?: string };
+  | { type: 'E_PATCH_SET_REJECTED'; reason?: string }
+  // Gated pipeline events
+  | { type: 'E_STAGE_APPROVED'; stage: GatedStage; nextStage: GatedStage }
+  | { type: 'E_STAGE_REJECTED'; stage: GatedStage; reason?: string }
+  | { type: 'E_STAGE_CHANGES_REQUESTED'; stage: GatedStage; reason: string };
 
 export type EnqueueJob =
   | { queue: 'workflow'; name: 'ingest_context'; payload: { workflowId: string } }
   | { queue: 'workflow'; name: 'apply_patches'; payload: { workflowId: string; patchSetId: string } }
-  | { queue: 'workflow'; name: 'evaluate_policy'; payload: { workflowId: string; patchSetId: string } };
+  | { queue: 'workflow'; name: 'evaluate_policy'; payload: { workflowId: string; patchSetId: string } }
+  // Gated pipeline jobs
+  | { queue: 'workflow'; name: 'feasibility_analysis'; payload: { workflowId: string } }
+  | { queue: 'workflow'; name: 'architecture_analysis'; payload: { workflowId: string } }
+  | { queue: 'workflow'; name: 'timeline_analysis'; payload: { workflowId: string } };

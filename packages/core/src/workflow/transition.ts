@@ -1,4 +1,4 @@
-import type { WorkflowState, TransitionEvent, EnqueueJob } from './states';
+import type { WorkflowState, TransitionEvent, EnqueueJob, GatedStage } from './states';
 
 export type TransitionContext = {
   workflowId: string;
@@ -24,6 +24,10 @@ export type TransitionContext = {
   patchSetsNeedingApproval?: string[];
   approvedPatchSetIds?: string[];
   allPatchSetsApplied?: boolean;
+
+  // Gated pipeline context
+  currentStage?: GatedStage;
+  stageStatus?: string;
 
   // optional: attempt counts, retry budgets later
 };
@@ -51,13 +55,22 @@ export function transition(
     reason
   });
 
-  // INGESTED state transitions
-  if (current === 'INGESTED') {
-    if (event.type === 'E_WORKFLOW_CREATED') {
-      return result('INGESTED', [
-        { queue: 'workflow', name: 'ingest_context', payload: { workflowId: ctx.workflowId } }
-      ], 'Workflow created, enqueueing ingest_context');
+  // Handle new workflow creation (gated or legacy)
+  if (event.type === 'E_WORKFLOW_CREATED') {
+    // For gated pipeline (stage=feasibility), start feasibility analysis
+    if (ctx.currentStage === 'feasibility') {
+      return result(current, [
+        { queue: 'workflow', name: 'feasibility_analysis', payload: { workflowId: ctx.workflowId } }
+      ], 'Workflow created, enqueueing feasibility_analysis (gated pipeline)');
     }
+    // Legacy path: start ingest_context
+    return result('INGESTED', [
+      { queue: 'workflow', name: 'ingest_context', payload: { workflowId: ctx.workflowId } }
+    ], 'Workflow created, enqueueing ingest_context');
+  }
+
+  // INGESTED state transitions (legacy)
+  if (current === 'INGESTED') {
 
     if (event.type === 'E_JOB_COMPLETED' && event.stage === 'ingest_context') {
       if (ctx.hasPatchSets) {
@@ -243,11 +256,74 @@ export function transition(
     return result('BLOCKED_POLICY', [], 'Policy violations detected');
   }
 
+  // ============================================================================
+  // Gated Pipeline Stage Events
+  // ============================================================================
+
+  // Handle feasibility job completion - stage moves to 'ready' (handled by processor)
+  // but we need to handle the event if it comes through orchestrator
+  if (event.type === 'E_JOB_COMPLETED' && event.stage === 'feasibility') {
+    // Feasibility processor updates stageStatus to 'ready'
+    // No state change needed here - stay in INGESTED until user approves
+    return result(current, [], 'Feasibility analysis completed, awaiting user approval');
+  }
+
+  if (event.type === 'E_JOB_FAILED' && event.stage === 'feasibility') {
+    return result('NEEDS_HUMAN', [], `Feasibility analysis failed: ${event.error}`);
+  }
+
+  // Stage approval - triggers next stage's processor
+  if (event.type === 'E_STAGE_APPROVED') {
+    const nextStageJobs = getJobsForStage(event.nextStage, ctx.workflowId);
+    return result(current, nextStageJobs, `Stage ${event.stage} approved, advancing to ${event.nextStage}`);
+  }
+
+  // Stage rejection - workflow is rejected
+  if (event.type === 'E_STAGE_REJECTED') {
+    return result('REJECTED', [], `Stage ${event.stage} rejected: ${event.reason || 'No reason provided'}`);
+  }
+
+  // Stage changes requested - processor will re-run
+  if (event.type === 'E_STAGE_CHANGES_REQUESTED') {
+    const rerunJobs = getJobsForStage(event.stage, ctx.workflowId);
+    return result(current, rerunJobs, `Changes requested for ${event.stage}: ${event.reason}`);
+  }
+
   // Terminal states - no transitions out
-  if (current === 'DONE' || current === 'FAILED' || current === 'BLOCKED_POLICY' || current === 'NEEDS_HUMAN') {
+  if (current === 'DONE' || current === 'FAILED' || current === 'BLOCKED_POLICY' || current === 'NEEDS_HUMAN' || current === 'REJECTED') {
     return result(current, [], `No transition from terminal state ${current}`);
   }
 
   // Default: stay in current state (unknown event)
   return result(current, [], `No transition for event ${event.type} in state ${current}`);
+}
+
+/**
+ * Helper to get the jobs that should be enqueued for a given stage.
+ */
+function getJobsForStage(stage: GatedStage, workflowId: string): EnqueueJob[] {
+  switch (stage) {
+    case 'feasibility':
+      return [{ queue: 'workflow', name: 'feasibility_analysis', payload: { workflowId } }];
+    case 'architecture':
+      return [{ queue: 'workflow', name: 'architecture_analysis', payload: { workflowId } }];
+    case 'timeline':
+      return [{ queue: 'workflow', name: 'timeline_analysis', payload: { workflowId } }];
+    case 'patches':
+      // Patches stage uses ingest_context (legacy name)
+      return [{ queue: 'workflow', name: 'ingest_context', payload: { workflowId } }];
+    case 'policy':
+      // Policy evaluation is handled when patches are created
+      // No separate job needed at stage transition
+      return [];
+    case 'pr':
+      // PR creation is handled when patches are approved
+      // No separate job needed at stage transition
+      return [];
+    case 'done':
+      // Terminal - no jobs
+      return [];
+    default:
+      return [];
+  }
 }

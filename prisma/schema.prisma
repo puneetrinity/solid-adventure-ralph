@@ -10,13 +10,22 @@ datasource db {
 
 model Workflow {
   id         String   @id @default(uuid())
-  state      String
+  state      String   // Legacy state field (keep for backwards compat)
   title      String?
 
-  // Goal and context for LLM
-  goal       String?  // Plain English request or ticket text (required in UI)
+  // Goal and context for LLM (legacy fields)
+  goal       String?  // Plain English request or ticket text
   context    String?  // Extra info, links, acceptance criteria
   feedback   String?  // Latest feedback from Request Changes
+
+  // New gated workflow fields
+  featureGoal          String?  // Required in UI: what user wants to build
+  businessJustification String? // Required in UI: why it matters
+
+  // Stage tracking (new gated pipeline)
+  stage          String   @default("feasibility")  // feasibility | architecture | timeline | patches | policy | pr | done
+  stageStatus    String   @default("pending")      // pending | processing | ready | approved | rejected | blocked | needs_changes
+  stageUpdatedAt DateTime @default(now())
 
   // Legacy single-repo fields (deprecated, use WorkflowRepo)
   repoOwner  String?
@@ -36,6 +45,9 @@ model Workflow {
   runs             WorkflowRun[]
   policyViolations PolicyViolation[]
   checkpoints      Checkpoint[]
+  stageDecisions   StageDecision[]
+
+  @@index([stage, stageStatus])
 }
 
 model WorkflowRepo {
@@ -99,15 +111,36 @@ model WorkflowEvent {
 model Artifact {
   id         String   @id @default(uuid())
   workflowId String
-  kind       String
+  kind       String   // FeasibilityV1 | ArchitectureV1 | TimelineV1 | PolicyV1 | DecisionV1
   path       String?
   content    String
   contentSha String
   createdAt  DateTime @default(now())
 
+  // Versioning for re-runs
+  artifactVersion      Int      @default(1)
+  supersedesArtifactId String?  // Points to previous version if this is a re-run
+
   workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 
   @@index([workflowId, kind, createdAt])
+  @@index([supersedesArtifactId])
+}
+
+model StageDecision {
+  id         String   @id @default(uuid())
+  workflowId String
+  stage      String   // feasibility | architecture | timeline | patches | policy | pr
+  decision   String   // approve | reject | request_changes
+  reason     String?  // User-provided feedback or rationale
+  actorId    String?  // User ID who made the decision
+  actorName  String?  // Display name for UI
+  createdAt  DateTime @default(now())
+
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, stage])
+  @@index([workflowId, createdAt])
 }
 
 model Approval {

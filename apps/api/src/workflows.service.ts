@@ -107,7 +107,9 @@ export class WorkflowsService {
   }
 
   async create(params: {
-    goal: string;
+    featureGoal?: string;
+    businessJustification?: string;
+    goal?: string;  // Legacy
     context?: string;
     title?: string;
     repos?: Array<{ owner: string; repo: string; baseBranch?: string; role?: string }>;
@@ -115,11 +117,14 @@ export class WorkflowsService {
     repoName?: string;
     baseBranch?: string;
   }) {
-    const { goal, context, title, repos, repoOwner, repoName, baseBranch } = params;
+    const { featureGoal, businessJustification, goal, context, title, repos, repoOwner, repoName, baseBranch } = params;
+
+    // Use featureGoal if provided, otherwise fall back to legacy goal
+    const effectiveGoal = featureGoal || goal;
 
     // Validate goal is provided
-    if (!goal?.trim()) {
-      throw new BadRequestException('goal is required');
+    if (!effectiveGoal?.trim()) {
+      throw new BadRequestException('featureGoal is required');
     }
 
     // Handle repos array or legacy single-repo fields
@@ -148,11 +153,19 @@ export class WorkflowsService {
 
     const workflow = await this.prisma.workflow.create({
       data: {
-        state: 'INGESTED',
-        goal: goal,
+        state: 'INTAKE',  // New initial state for gated pipeline
+        // New gated workflow fields
+        featureGoal: featureGoal || null,
+        businessJustification: businessJustification || null,
+        // Stage tracking
+        stage: 'feasibility',
+        stageStatus: 'pending',
+        stageUpdatedAt: new Date(),
+        // Legacy fields
+        goal: effectiveGoal,
         context: context || null,
-        title: title || goal.substring(0, 100),
-        // Legacy fields for backwards compat
+        title: title || effectiveGoal.substring(0, 100),
+        // Legacy repo fields for backwards compat
         repoOwner: primaryRepo.owner,
         repoName: primaryRepo.repo,
         baseBranch: primaryRepo.baseBranch || 'main',
@@ -176,11 +189,11 @@ export class WorkflowsService {
       data: {
         workflowId: workflow.id,
         type: 'ui.create',
-        payload: { goal, context, title, repos: repoList }
+        payload: { featureGoal, businessJustification, goal: effectiveGoal, context, title, repos: repoList }
       }
     });
 
-    // Emit event to orchestrator
+    // Emit event to orchestrator to start feasibility analysis
     await this.orchestrateQueue.add('orchestrate', {
       workflowId: workflow.id,
       event: { type: 'E_WORKFLOW_CREATED' }
@@ -189,6 +202,10 @@ export class WorkflowsService {
     return {
       id: workflow.id,
       state: workflow.state,
+      stage: workflow.stage,
+      stageStatus: workflow.stageStatus,
+      featureGoal: workflow.featureGoal,
+      businessJustification: workflow.businessJustification,
       goal: workflow.goal,
       context: workflow.context,
       title: workflow.title,
@@ -213,7 +230,8 @@ export class WorkflowsService {
         approvals: { orderBy: { createdAt: 'asc' } },
         pullRequests: { orderBy: { createdAt: 'desc' } },
         runs: { orderBy: { startedAt: 'desc' } },
-        policyViolations: { orderBy: { createdAt: 'asc' } }
+        policyViolations: { orderBy: { createdAt: 'asc' } },
+        stageDecisions: { orderBy: { createdAt: 'asc' } }
       }
     });
 
@@ -396,8 +414,220 @@ export class WorkflowsService {
     await this.prisma.patchSet.deleteMany({ where: { workflowId } });
 
     await this.prisma.workflowRepo.deleteMany({ where: { workflowId } });
+    await this.prisma.stageDecision.deleteMany({ where: { workflowId } });
     await this.prisma.workflow.delete({ where: { id: workflowId } });
 
     return { ok: true, workflowId };
+  }
+
+  // ============================================================================
+  // Stage Actions (Gated Pipeline)
+  // ============================================================================
+
+  private readonly VALID_STAGES = ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'];
+  private readonly NEXT_STAGE: Record<string, string> = {
+    'feasibility': 'architecture',
+    'architecture': 'timeline',
+    'timeline': 'patches',
+    'patches': 'policy',
+    'policy': 'pr',
+    'pr': 'done'
+  };
+
+  async approveStage(
+    workflowId: string,
+    stage: string,
+    reason?: string,
+    actorId?: string,
+    actorName?: string
+  ) {
+    const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND', workflowId, stage, newStatus: '' };
+    }
+
+    // Validate stage
+    if (!this.VALID_STAGES.includes(stage)) {
+      return { ok: false, error: 'INVALID_STAGE', workflowId, stage, newStatus: '' };
+    }
+
+    // Check workflow is at the right stage and status
+    if (workflow.stage !== stage) {
+      return { ok: false, error: 'WRONG_STAGE', workflowId, stage, newStatus: workflow.stageStatus, currentStage: workflow.stage };
+    }
+
+    if (workflow.stageStatus !== 'ready') {
+      return { ok: false, error: 'STAGE_NOT_READY', workflowId, stage, newStatus: workflow.stageStatus };
+    }
+
+    // Create decision record
+    const decision = await this.prisma.stageDecision.create({
+      data: {
+        workflowId,
+        stage,
+        decision: 'approve',
+        reason: reason || null,
+        actorId: actorId || null,
+        actorName: actorName || null,
+      }
+    });
+
+    // Determine next stage
+    const nextStage = this.NEXT_STAGE[stage] || 'done';
+
+    // Update workflow
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: {
+        stage: nextStage,
+        stageStatus: nextStage === 'done' ? 'approved' : 'pending',
+        stageUpdatedAt: new Date(),
+        state: nextStage === 'done' ? 'DONE' : workflow.state, // Update legacy state if done
+      }
+    });
+
+    // Record event
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: `ui.stage.${stage}.approved`,
+        payload: { stage, reason, actorId, actorName, nextStage, decisionId: decision.id }
+      }
+    });
+
+    // Emit event to orchestrator to process next stage
+    await this.orchestrateQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_STAGE_APPROVED', stage, nextStage }
+    });
+
+    return { ok: true, workflowId, stage, newStatus: 'approved', decisionId: decision.id };
+  }
+
+  async rejectStage(
+    workflowId: string,
+    stage: string,
+    reason?: string,
+    actorId?: string,
+    actorName?: string
+  ) {
+    const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND', workflowId, stage, newStatus: '' };
+    }
+
+    // Validate stage
+    if (!this.VALID_STAGES.includes(stage)) {
+      return { ok: false, error: 'INVALID_STAGE', workflowId, stage, newStatus: '' };
+    }
+
+    // Check workflow is at the right stage
+    if (workflow.stage !== stage) {
+      return { ok: false, error: 'WRONG_STAGE', workflowId, stage, newStatus: workflow.stageStatus, currentStage: workflow.stage };
+    }
+
+    // Create decision record
+    const decision = await this.prisma.stageDecision.create({
+      data: {
+        workflowId,
+        stage,
+        decision: 'reject',
+        reason: reason || null,
+        actorId: actorId || null,
+        actorName: actorName || null,
+      }
+    });
+
+    // Update workflow - rejected stops the workflow
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: {
+        stageStatus: 'rejected',
+        stageUpdatedAt: new Date(),
+        state: 'REJECTED',
+      }
+    });
+
+    // Record event
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: `ui.stage.${stage}.rejected`,
+        payload: { stage, reason, actorId, actorName, decisionId: decision.id }
+      }
+    });
+
+    // Emit event to orchestrator
+    await this.orchestrateQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_STAGE_REJECTED', stage, reason }
+    });
+
+    return { ok: true, workflowId, stage, newStatus: 'rejected', decisionId: decision.id };
+  }
+
+  async requestStageChanges(
+    workflowId: string,
+    stage: string,
+    reason: string,
+    actorId?: string,
+    actorName?: string
+  ) {
+    const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND', workflowId, stage, newStatus: '' };
+    }
+
+    // Validate stage
+    if (!this.VALID_STAGES.includes(stage)) {
+      return { ok: false, error: 'INVALID_STAGE', workflowId, stage, newStatus: '' };
+    }
+
+    // Check workflow is at the right stage
+    if (workflow.stage !== stage) {
+      return { ok: false, error: 'WRONG_STAGE', workflowId, stage, newStatus: workflow.stageStatus, currentStage: workflow.stage };
+    }
+
+    // Create decision record
+    const decision = await this.prisma.stageDecision.create({
+      data: {
+        workflowId,
+        stage,
+        decision: 'request_changes',
+        reason: reason || null,
+        actorId: actorId || null,
+        actorName: actorName || null,
+      }
+    });
+
+    // Update workflow - needs_changes triggers re-run
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: {
+        stageStatus: 'needs_changes',
+        stageUpdatedAt: new Date(),
+        feedback: reason, // Store feedback for LLM
+      }
+    });
+
+    // Record event
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: `ui.stage.${stage}.request_changes`,
+        payload: { stage, reason, actorId, actorName, decisionId: decision.id }
+      }
+    });
+
+    // Emit event to orchestrator to re-run the stage
+    await this.orchestrateQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_STAGE_CHANGES_REQUESTED', stage, reason }
+    });
+
+    return { ok: true, workflowId, stage, newStatus: 'needs_changes', decisionId: decision.id };
   }
 }

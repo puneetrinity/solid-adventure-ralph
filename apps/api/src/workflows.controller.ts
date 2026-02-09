@@ -11,6 +11,8 @@ import {
   PaginatedWorkflowsResponseDto,
   ApprovalResponseDto,
   ErrorResponseDto,
+  StageActionDto,
+  StageDecisionResponseDto,
 } from './dto';
 
 @ApiTags('workflows')
@@ -126,6 +128,64 @@ export class WorkflowsController {
     @Req() req: AuthenticatedRequest
   ) {
     return this.workflows.cancel(id, req.user.username);
+  }
+
+  // ============================================================================
+  // Stage Actions (Gated Pipeline)
+  // ============================================================================
+
+  @Post(':id/stages/:stage/approve')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Approve stage', description: 'Approve a workflow stage to proceed to the next stage' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'] })
+  @ApiResponse({ status: 200, description: 'Stage approved', type: StageDecisionResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async approveStage(
+    @Param('id') id: string,
+    @Param('stage') stage: string,
+    @Body() body: StageActionDto,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.workflows.approveStage(id, stage, body?.reason, req.user.id, req.user.username);
+  }
+
+  @Post(':id/stages/:stage/reject')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Reject stage', description: 'Reject a workflow stage, stopping the workflow' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'] })
+  @ApiResponse({ status: 200, description: 'Stage rejected', type: StageDecisionResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async rejectStage(
+    @Param('id') id: string,
+    @Param('stage') stage: string,
+    @Body() body: StageActionDto,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.workflows.rejectStage(id, stage, body?.reason, req.user.id, req.user.username);
+  }
+
+  @Post(':id/stages/:stage/request_changes')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Request changes', description: 'Request changes to a stage, triggering a re-run with feedback' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'] })
+  @ApiResponse({ status: 200, description: 'Changes requested', type: StageDecisionResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async requestStageChanges(
+    @Param('id') id: string,
+    @Param('stage') stage: string,
+    @Body() body: StageActionDto,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.workflows.requestStageChanges(id, stage, body?.reason || '', req.user.id, req.user.username);
   }
 
   @Delete(':id')

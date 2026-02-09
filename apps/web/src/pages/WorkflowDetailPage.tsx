@@ -24,6 +24,12 @@ import {
   Package,
   Trash2,
   Ban,
+  Lightbulb,
+  Boxes,
+  CalendarClock,
+  FileDiff,
+  Shield,
+  Rocket,
 } from 'lucide-react';
 import { useWorkflow } from '../hooks/use-workflow';
 import { WorkflowStatusBadge } from '../components/workflow';
@@ -39,6 +45,8 @@ import type {
   PullRequest,
   WorkflowRun,
   WorkflowRepo,
+  GatedStage,
+  StageStatus,
 } from '../types';
 
 type RepoContextStatus = {
@@ -70,6 +78,13 @@ export function WorkflowDetailPage() {
   const [repoContexts, setRepoContexts] = useState<Record<string, RepoContextStatus>>({});
   const [repoContextLoading, setRepoContextLoading] = useState(false);
   const [refreshingRepoKey, setRefreshingRepoKey] = useState<string | null>(null);
+
+  // Stage action state
+  const [stageActionLoading, setStageActionLoading] = useState(false);
+  const [showStageRejectModal, setShowStageRejectModal] = useState(false);
+  const [showStageChangesModal, setShowStageChangesModal] = useState(false);
+  const [stageRejectReason, setStageRejectReason] = useState('');
+  const [stageChangesReason, setStageChangesReason] = useState('');
 
   const canCancel = workflow && ['INGESTED', 'PATCHES_PROPOSED', 'WAITING_USER_APPROVAL', 'APPLYING_PATCHES', 'PR_OPEN', 'VERIFYING_CI'].includes(workflow.state);
 
@@ -147,6 +162,50 @@ export function WorkflowDetailPage() {
       console.error('Failed to refresh context:', err);
     } finally {
       setRefreshingRepoKey(null);
+    }
+  };
+
+  // Stage action handlers
+  const handleStageApprove = async () => {
+    if (!workflow || !workflow.stage) return;
+    setStageActionLoading(true);
+    try {
+      await api.workflows.approveStage(workflow.id, workflow.stage);
+      await refetch();
+    } catch (err) {
+      console.error('Failed to approve stage:', err);
+    } finally {
+      setStageActionLoading(false);
+    }
+  };
+
+  const handleStageReject = async () => {
+    if (!workflow || !workflow.stage || !stageRejectReason.trim()) return;
+    setStageActionLoading(true);
+    try {
+      await api.workflows.rejectStage(workflow.id, workflow.stage, stageRejectReason);
+      setShowStageRejectModal(false);
+      setStageRejectReason('');
+      await refetch();
+    } catch (err) {
+      console.error('Failed to reject stage:', err);
+    } finally {
+      setStageActionLoading(false);
+    }
+  };
+
+  const handleStageRequestChanges = async () => {
+    if (!workflow || !workflow.stage || !stageChangesReason.trim()) return;
+    setStageActionLoading(true);
+    try {
+      await api.workflows.requestStageChanges(workflow.id, workflow.stage, stageChangesReason);
+      setShowStageChangesModal(false);
+      setStageChangesReason('');
+      await refetch();
+    } catch (err) {
+      console.error('Failed to request changes:', err);
+    } finally {
+      setStageActionLoading(false);
     }
   };
 
@@ -324,6 +383,88 @@ export function WorkflowDetailPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Stage Reject Modal */}
+      <Modal
+        isOpen={showStageRejectModal}
+        onClose={() => { setShowStageRejectModal(false); setStageRejectReason(''); }}
+        title={`Reject ${workflow.stage} Stage`}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            This will stop the workflow. Please provide a reason for rejection.
+          </p>
+          <textarea
+            value={stageRejectReason}
+            onChange={(e) => setStageRejectReason(e.target.value)}
+            placeholder="Reason for rejection..."
+            className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[100px]"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setShowStageRejectModal(false); setStageRejectReason(''); }}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-md hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleStageReject}
+              disabled={!stageRejectReason.trim() || stageActionLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
+            >
+              {stageActionLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+              Reject
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Stage Request Changes Modal */}
+      <Modal
+        isOpen={showStageChangesModal}
+        onClose={() => { setShowStageChangesModal(false); setStageChangesReason(''); }}
+        title={`Request Changes for ${workflow.stage} Stage`}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Describe the changes needed. The stage will be re-run with your feedback.
+          </p>
+          <textarea
+            value={stageChangesReason}
+            onChange={(e) => setStageChangesReason(e.target.value)}
+            placeholder="Describe the changes needed..."
+            className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[100px]"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setShowStageChangesModal(false); setStageChangesReason(''); }}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-md hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleStageRequestChanges}
+              disabled={!stageChangesReason.trim() || stageActionLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50"
+            >
+              {stageActionLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
+              Request Changes
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Stage Pipeline Progress */}
+      {workflow.stage && (
+        <StagePipeline
+          stage={workflow.stage}
+          stageStatus={workflow.stageStatus || 'pending'}
+          onApprove={handleStageApprove}
+          onReject={() => setShowStageRejectModal(true)}
+          onRequestChanges={() => setShowStageChangesModal(true)}
+          isLoading={stageActionLoading}
+        />
+      )}
 
       {/* Approval banner when waiting */}
       {workflow.state === 'WAITING_USER_APPROVAL' && (
@@ -1396,6 +1537,200 @@ function RunsTab({ runs }: { runs: WorkflowRun[] }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Stage pipeline component
+const STAGES: { key: GatedStage; label: string; icon: typeof Lightbulb }[] = [
+  { key: 'feasibility', label: 'Feasibility', icon: Lightbulb },
+  { key: 'architecture', label: 'Architecture', icon: Boxes },
+  { key: 'timeline', label: 'Timeline', icon: CalendarClock },
+  { key: 'patches', label: 'Patches', icon: FileDiff },
+  { key: 'policy', label: 'Policy', icon: Shield },
+  { key: 'pr', label: 'PR', icon: Rocket },
+];
+
+function StagePipeline({
+  stage,
+  stageStatus,
+  onApprove,
+  onReject,
+  onRequestChanges,
+  isLoading,
+}: {
+  stage: GatedStage;
+  stageStatus: StageStatus;
+  onApprove: () => void;
+  onReject: () => void;
+  onRequestChanges: () => void;
+  isLoading: boolean;
+}) {
+  const currentIndex = STAGES.findIndex(s => s.key === stage);
+  const isTerminal = stage === 'done' || stageStatus === 'rejected';
+  const canTakeAction = stageStatus === 'ready' && !isLoading;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4">
+      {/* Stage progress bar */}
+      <div className="flex items-center justify-between mb-4">
+        {STAGES.map((s, idx) => {
+          const Icon = s.icon;
+          const isPast = idx < currentIndex;
+          const isCurrent = s.key === stage;
+
+          let statusClass = 'bg-gray-100 text-gray-400 border-gray-200';
+          let dotClass = 'bg-gray-300';
+
+          if (isPast || (isCurrent && stageStatus === 'approved')) {
+            statusClass = 'bg-green-50 text-green-700 border-green-200';
+            dotClass = 'bg-green-500';
+          } else if (isCurrent) {
+            if (stageStatus === 'processing') {
+              statusClass = 'bg-blue-50 text-blue-700 border-blue-200';
+              dotClass = 'bg-blue-500 animate-pulse';
+            } else if (stageStatus === 'ready') {
+              statusClass = 'bg-yellow-50 text-yellow-700 border-yellow-200';
+              dotClass = 'bg-yellow-500';
+            } else if (stageStatus === 'rejected') {
+              statusClass = 'bg-red-50 text-red-700 border-red-200';
+              dotClass = 'bg-red-500';
+            } else if (stageStatus === 'blocked' || stageStatus === 'needs_changes') {
+              statusClass = 'bg-orange-50 text-orange-700 border-orange-200';
+              dotClass = 'bg-orange-500';
+            } else {
+              statusClass = 'bg-gray-100 text-gray-600 border-gray-300';
+              dotClass = 'bg-gray-400';
+            }
+          }
+
+          return (
+            <div key={s.key} className="flex items-center flex-1">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border ${statusClass}`}>
+                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
+                <Icon className="h-4 w-4" />
+                <span className="hidden sm:inline font-medium">{s.label}</span>
+              </div>
+              {idx < STAGES.length - 1 && (
+                <div className={`flex-1 h-0.5 mx-2 ${isPast ? 'bg-green-300' : 'bg-gray-200'}`} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Current stage info and actions */}
+      {!isTerminal && (
+        <div className={`rounded-lg p-4 ${
+          stageStatus === 'ready'
+            ? 'bg-yellow-50 border border-yellow-200'
+            : stageStatus === 'processing'
+            ? 'bg-blue-50 border border-blue-200'
+            : stageStatus === 'needs_changes'
+            ? 'bg-orange-50 border border-orange-200'
+            : 'bg-gray-50 border border-gray-200'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {stageStatus === 'processing' && (
+                <RefreshCw className="h-5 w-5 text-blue-500 animate-spin" />
+              )}
+              {stageStatus === 'ready' && (
+                <AlertCircle className="h-5 w-5 text-yellow-500" />
+              )}
+              {stageStatus === 'needs_changes' && (
+                <MessageSquare className="h-5 w-5 text-orange-500" />
+              )}
+              {stageStatus === 'pending' && (
+                <Clock className="h-5 w-5 text-gray-400" />
+              )}
+              <div>
+                <h3 className={`text-sm font-medium ${
+                  stageStatus === 'ready' ? 'text-yellow-800' :
+                  stageStatus === 'processing' ? 'text-blue-800' :
+                  stageStatus === 'needs_changes' ? 'text-orange-800' :
+                  'text-gray-700'
+                }`}>
+                  {stageStatus === 'ready' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} analysis ready for review`}
+                  {stageStatus === 'processing' && `Running ${stage} analysis...`}
+                  {stageStatus === 'needs_changes' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage needs changes`}
+                  {stageStatus === 'pending' && `Waiting to start ${stage} stage`}
+                </h3>
+                <p className={`text-sm ${
+                  stageStatus === 'ready' ? 'text-yellow-700' :
+                  stageStatus === 'processing' ? 'text-blue-700' :
+                  stageStatus === 'needs_changes' ? 'text-orange-700' :
+                  'text-gray-500'
+                }`}>
+                  {stageStatus === 'ready' && 'Review the analysis and approve to proceed to the next stage.'}
+                  {stageStatus === 'processing' && 'Please wait while the analysis is being generated.'}
+                  {stageStatus === 'needs_changes' && 'The analysis is being re-run with your feedback.'}
+                  {stageStatus === 'pending' && 'The previous stage needs to be approved first.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            {canTakeAction && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onRequestChanges}
+                  disabled={isLoading}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-yellow-700 border border-yellow-300 rounded-md hover:bg-yellow-100 disabled:opacity-50"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  Request Changes
+                </button>
+                <button
+                  onClick={onReject}
+                  disabled={isLoading}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-700 border border-red-300 rounded-md hover:bg-red-100 disabled:opacity-50"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Reject
+                </button>
+                <button
+                  onClick={onApprove}
+                  disabled={isLoading}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                >
+                  {isLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCircle className="h-4 w-4" />
+                  )}
+                  Approve
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Terminal states */}
+      {stage === 'done' && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+          <div className="flex items-center gap-3">
+            <CheckCircle className="h-5 w-5 text-green-500" />
+            <div>
+              <h3 className="text-sm font-medium text-green-800">Workflow Complete</h3>
+              <p className="text-sm text-green-700">All stages have been approved and the PR has been created.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stageStatus === 'rejected' && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-center gap-3">
+            <XCircle className="h-5 w-5 text-red-500" />
+            <div>
+              <h3 className="text-sm font-medium text-red-800">Workflow Rejected</h3>
+              <p className="text-sm text-red-700">This workflow was rejected at the {stage} stage.</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

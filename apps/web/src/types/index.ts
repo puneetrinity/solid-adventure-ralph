@@ -1,5 +1,6 @@
 // Workflow types
 export type WorkflowState =
+  | 'INTAKE'
   | 'INGESTED'
   | 'PATCHES_PROPOSED'
   | 'WAITING_USER_APPROVAL'
@@ -10,7 +11,23 @@ export type WorkflowState =
   | 'BLOCKED_POLICY'
   | 'NEEDS_HUMAN'
   | 'FAILED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'REJECTED';
+
+// Gated pipeline types
+export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'patches' | 'policy' | 'pr' | 'done';
+export type StageStatus = 'pending' | 'processing' | 'ready' | 'approved' | 'rejected' | 'blocked' | 'needs_changes';
+
+export interface StageDecision {
+  id: string;
+  workflowId: string;
+  stage: GatedStage;
+  decision: 'approve' | 'reject' | 'request_changes';
+  reason?: string;
+  actorId?: string;
+  actorName?: string;
+  createdAt: string;
+}
 
 export interface PullRequest {
   id: string;
@@ -67,6 +84,13 @@ export interface Workflow {
   goal?: string;
   context?: string;
   feedback?: string;
+  // Gated pipeline fields
+  featureGoal?: string;
+  businessJustification?: string;
+  stage?: GatedStage;
+  stageStatus?: StageStatus;
+  stageUpdatedAt?: string;
+  stageDecisions?: StageDecision[];
   // Multi-repo support
   repos?: WorkflowRepo[];
   // Legacy single-repo fields (deprecated)
