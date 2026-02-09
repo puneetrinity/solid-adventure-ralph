@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { RefreshCw, AlertCircle, Inbox, Plus, X, GitBranch, Star, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
 import { useWorkflows } from '../hooks/use-workflows';
 import { WorkflowStatusBadge } from '../components/workflow';
@@ -32,6 +32,7 @@ function setStoredRepoFilter(filter: string) {
 }
 
 export function WorkflowsPage() {
+  const [searchParams] = useSearchParams();
   const [statusFilter, setStatusFilter] = useState('');
   const [repoFilter, setRepoFilter] = useState(getStoredRepoFilter);
   const [searchQuery, setSearchQuery] = useState('');
@@ -61,6 +62,16 @@ export function WorkflowsPage() {
     repoName,
   });
   const { toast, showToast, hideToast } = useToast();
+
+  useEffect(() => {
+    const owner = searchParams.get('repoOwner');
+    const repo = searchParams.get('repoName');
+    if (owner && repo) {
+      const value = `${owner}/${repo}`;
+      setRepoFilter(value);
+      setStoredRepoFilter(value);
+    }
+  }, [searchParams]);
 
   // Update stored filter when changed
   const handleRepoFilterChange = (value: string) => {
@@ -304,7 +315,7 @@ export function WorkflowsPage() {
             onClick={() => setShowCreateModal(true)}
             className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
           >
-            New Workflow
+            New Feature Request
           </button>
           <button
             onClick={() => refetch()}
@@ -524,7 +535,7 @@ export function WorkflowsPage() {
             setShowCreateModal(false);
           }
         }}
-        title="Create Workflow"
+        title="Create Feature Request"
       >
         <div className="space-y-4">
           {/* Feature Goal - Required */}

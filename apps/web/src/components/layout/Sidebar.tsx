@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, GitBranch, Settings, X } from 'lucide-react';
+import { LayoutDashboard, GitBranch, Settings, X, FolderGit2 } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -7,7 +7,8 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/repos', icon: FolderGit2, label: 'Repositories' },
+  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/workflows', icon: GitBranch, label: 'Workflows' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

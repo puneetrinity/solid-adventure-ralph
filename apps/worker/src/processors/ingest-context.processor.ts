@@ -81,6 +81,13 @@ export class IngestContextProcessor extends WorkerHost {
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
+    if (workflow.stage === 'patches' && workflow.stageStatus !== 'processing') {
+      await this.prisma.workflow.update({
+        where: { id: workflowId },
+        data: { stageStatus: 'processing', stageUpdatedAt: new Date() }
+      });
+    }
+
     // Build list of repos to process
     const repos: RepoConfig[] = [];
     if (workflow.repos && workflow.repos.length > 0) {
@@ -223,6 +230,13 @@ export class IngestContextProcessor extends WorkerHost {
           payload: { patchSetIds, repoCount: repos.length }
         }
       });
+
+      if (workflow.stage === 'patches') {
+        await this.prisma.workflow.update({
+          where: { id: workflowId },
+          data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+        });
+      }
 
       // Record run completion
       await this.runRecorder.completeRun({

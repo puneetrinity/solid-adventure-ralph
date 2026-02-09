@@ -30,6 +30,21 @@ export class EvaluatePolicyProcessor extends WorkerHost {
     });
 
     try {
+      const workflow = await this.prisma.workflow.findUnique({
+        where: { id: workflowId }
+      });
+
+      if (!workflow) {
+        throw new Error(`Workflow ${workflowId} not found`);
+      }
+
+      if (workflow.stage === 'policy' && workflow.stageStatus === 'pending') {
+        await this.prisma.workflow.update({
+          where: { id: workflowId },
+          data: { stageStatus: 'processing', stageUpdatedAt: new Date() }
+        });
+      }
+
       // Get patch set with patches
       const patchSet = await this.prisma.patchSet.findUnique({
         where: { id: patchSetId },
@@ -160,6 +175,39 @@ export class EvaluatePolicyProcessor extends WorkerHost {
           }
         }
       });
+
+      if (workflow.stage === 'policy') {
+        const proposedPatchSets = await this.prisma.patchSet.findMany({
+          where: { workflowId, status: 'proposed' },
+          select: { id: true }
+        });
+
+        let remaining = 0;
+        for (const ps of proposedPatchSets) {
+          const hasViolations = await this.prisma.policyViolation.findFirst({
+            where: { patchSetId: ps.id }
+          });
+
+          const hasEvalEvent = await this.prisma.workflowEvent.findFirst({
+            where: {
+              workflowId,
+              type: 'worker.evaluate_policy.completed',
+              payload: { path: ['patchSetId'], equals: ps.id }
+            }
+          });
+
+          if (!hasEvalEvent && !hasViolations) {
+            remaining += 1;
+          }
+        }
+
+        if (remaining === 0) {
+          await this.prisma.workflow.update({
+            where: { id: workflowId },
+            data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+          });
+        }
+      }
 
       // Record run completion
       await this.runRecorder.completeRun({

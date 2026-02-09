@@ -4,6 +4,7 @@ import { Layout } from './components/layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import {
   DashboardPage,
+  ReposPage,
   WorkflowsPage,
   WorkflowDetailPage,
   PatchDetailPage,
@@ -27,7 +28,9 @@ function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<DashboardPage />} />
+            <Route index element={<ReposPage />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="repos" element={<ReposPage />} />
             <Route path="workflows" element={<WorkflowsPage />} />
             <Route path="workflows/:id" element={<WorkflowDetailPage />} />
             <Route path="patches/:id" element={<PatchDetailPage />} />

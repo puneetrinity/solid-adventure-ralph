@@ -37,7 +37,6 @@ import { Modal } from '../components/ui';
 import { api } from '../api/client';
 import type {
   Workflow,
-  WorkflowEvent,
   Artifact,
   PatchSet,
   Patch,
@@ -747,7 +746,7 @@ export function WorkflowDetailPage() {
         {activeTab === 'overview' && <OverviewTab workflow={workflow} />}
         {activeTab === 'feasibility' && <FeasibilityTab workflow={workflow} />}
         {activeTab === 'architecture' && <ArchitectureTab workflow={workflow} />}
-        {activeTab === 'timeline' && <TimelineTab events={workflow.events || []} />}
+        {activeTab === 'timeline' && <TimelineTab workflow={workflow} />}
         {activeTab === 'artifacts' && <ArtifactsTab artifacts={workflow.artifacts || []} />}
         {activeTab === 'policy' && <PolicyTab violations={workflow.policyViolations || []} />}
         {activeTab === 'patches' && (
@@ -1067,8 +1066,18 @@ function FeasibilityTab({ workflow }: { workflow: Workflow }) {
   );
 }
 
-function TimelineTab({ events }: { events: WorkflowEvent[] }) {
+function TimelineTab({ workflow }: { workflow: Workflow }) {
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
+  const timelineArtifact = workflow.artifacts?.find(a => a.kind === 'TimelineV1');
+
+  let timelineData: any = null;
+  if (timelineArtifact) {
+    try {
+      timelineData = JSON.parse(timelineArtifact.content);
+    } catch {
+      timelineData = null;
+    }
+  }
 
   const toggleEvent = (id: string) => {
     setExpandedEvents(prev => {
@@ -1082,53 +1091,144 @@ function TimelineTab({ events }: { events: WorkflowEvent[] }) {
     });
   };
 
-  if (events.length === 0) {
-    return (
-      <div className="bg-white rounded-lg border border-gray-200 p-6 text-center text-gray-500">
-        No events recorded
-      </div>
-    );
-  }
-
   return (
-    <div className="bg-white rounded-lg border border-gray-200">
-      <ul className="divide-y divide-gray-200">
-        {events.map(event => {
-          const isExpanded = expandedEvents.has(event.id);
-          return (
-            <li key={event.id} className="p-4">
-              <button
-                onClick={() => toggleEvent(event.id)}
-                className="w-full flex items-start gap-3 text-left"
-              >
-                <div className="mt-1">
-                  {isExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-gray-400" />
-                  )}
-                </div>
-                <EventIcon type={event.type} />
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-sm text-gray-900">{event.type}</span>
-                    <span className="text-xs text-gray-500">
-                      {new Date(event.createdAt).toLocaleString()}
-                    </span>
+    <div className="space-y-6">
+      {!timelineArtifact && (
+        <div className="bg-white rounded-lg border border-gray-200 p-6 text-center text-gray-500">
+          No timeline analysis yet. Approve architecture to generate it.
+        </div>
+      )}
+
+      {timelineArtifact && timelineData && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-2">Summary</h3>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap">{timelineData.summary}</p>
+          </div>
+
+          {Array.isArray(timelineData.phases) && timelineData.phases.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-3">Phases</h3>
+              <div className="space-y-4">
+                {timelineData.phases.map((phase: any, idx: number) => (
+                  <div key={idx} className="border border-gray-200 rounded p-3">
+                    <div className="font-medium text-gray-900">{phase.name}</div>
+                    <p className="text-sm text-gray-700 mt-1">{phase.description}</p>
+                    {Array.isArray(phase.tasks) && phase.tasks.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {phase.tasks.map((task: any, i: number) => (
+                          <div key={i} className="bg-gray-50 rounded p-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-gray-800">{task.title}</span>
+                              {task.estimatedComplexity && (
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  task.estimatedComplexity === 'high'
+                                    ? 'bg-red-100 text-red-700'
+                                    : task.estimatedComplexity === 'medium'
+                                    ? 'bg-yellow-100 text-yellow-700'
+                                    : 'bg-green-100 text-green-700'
+                                }`}>
+                                  {task.estimatedComplexity}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">{task.description}</p>
+                            {Array.isArray(task.files) && task.files.length > 0 && (
+                              <div className="mt-1 text-xs text-gray-500 font-mono">
+                                Files: {task.files.join(', ')}
+                              </div>
+                            )}
+                            {Array.isArray(task.dependencies) && task.dependencies.length > 0 && (
+                              <div className="mt-1 text-xs text-gray-500">
+                                Depends on: {task.dependencies.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              </button>
-              {isExpanded && event.payload && (
-                <div className="mt-3 ml-12">
-                  <pre className="text-xs bg-gray-50 p-3 rounded overflow-x-auto">
-                    {JSON.stringify(event.payload, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {Array.isArray(timelineData.criticalPath) && timelineData.criticalPath.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Critical Path</h3>
+              <div className="flex flex-wrap gap-2">
+                {timelineData.criticalPath.map((task: string, i: number) => (
+                  <span key={i} className="text-xs bg-red-50 text-red-700 px-2 py-0.5 rounded">
+                    {task}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {Array.isArray(timelineData.parallelizable) && timelineData.parallelizable.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Parallelizable Work</h3>
+              <div className="space-y-2">
+                {timelineData.parallelizable.map((group: string[], i: number) => (
+                  <div key={i} className="text-xs text-gray-700">
+                    Group {i + 1}: {group.join(', ')}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500">
+            Generated: {new Date(timelineArtifact.createdAt).toLocaleString()}
+          </div>
+        </div>
+      )}
+
+      {workflow.events && workflow.events.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200">
+          <div className="px-4 py-3 border-b border-gray-200">
+            <h3 className="text-sm font-medium text-gray-900">Event Log</h3>
+          </div>
+          <ul className="divide-y divide-gray-200">
+            {workflow.events.map(event => {
+              const isExpanded = expandedEvents.has(event.id);
+              return (
+                <li key={event.id} className="p-4">
+                  <button
+                    onClick={() => toggleEvent(event.id)}
+                    className="w-full flex items-start gap-3 text-left"
+                  >
+                    <div className="mt-1">
+                      {isExpanded ? (
+                        <ChevronDown className="h-4 w-4 text-gray-400" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-gray-400" />
+                      )}
+                    </div>
+                    <EventIcon type={event.type} />
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-sm text-gray-900">{event.type}</span>
+                        <span className="text-xs text-gray-500">
+                          {new Date(event.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                  {isExpanded && event.payload && (
+                    <div className="mt-3 ml-12">
+                      <pre className="text-xs bg-gray-50 p-3 rounded overflow-x-auto">
+                        {JSON.stringify(event.payload, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -1970,6 +2070,16 @@ function StagePipeline({
 function ArchitectureTab({ workflow }: { workflow: Workflow }) {
   const repos = workflow.repos || [];
   const patchSets = workflow.patchSets || [];
+  const architectureArtifact = workflow.artifacts?.find(a => a.kind === 'ArchitectureV1');
+
+  let architectureData: any = null;
+  if (architectureArtifact) {
+    try {
+      architectureData = JSON.parse(architectureArtifact.content);
+    } catch {
+      architectureData = null;
+    }
+  }
 
   // Aggregate file changes across all patches
   const fileChanges: Record<string, { path: string; additions: number; deletions: number; repo: string }> = {};
@@ -2005,6 +2115,103 @@ function ArchitectureTab({ workflow }: { workflow: Workflow }) {
 
   return (
     <div className="space-y-6">
+      {!architectureArtifact && (
+        <div className="bg-white rounded-lg border border-gray-200 p-6 text-center text-gray-500">
+          No architecture analysis yet. Approve feasibility to generate it.
+        </div>
+      )}
+
+      {architectureArtifact && architectureData && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-2">Overview</h3>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap">{architectureData.overview}</p>
+          </div>
+
+          {Array.isArray(architectureData.components) && architectureData.components.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-3">Components</h3>
+              <div className="space-y-3">
+                {architectureData.components.map((component: any, idx: number) => (
+                  <div key={idx} className="border border-gray-200 rounded p-3">
+                    <div className="font-medium text-gray-900">{component.name}</div>
+                    <p className="text-sm text-gray-700 mt-1">{component.description}</p>
+                    {component.files?.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs text-gray-500 uppercase mb-1">Files</p>
+                        <div className="flex flex-wrap gap-1">
+                          {component.files.map((file: string, i: number) => (
+                            <span key={i} className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded font-mono">
+                              {file}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {component.dependencies?.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs text-gray-500 uppercase mb-1">Dependencies</p>
+                        <div className="flex flex-wrap gap-1">
+                          {component.dependencies.map((dep: string, i: number) => (
+                            <span key={i} className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded">
+                              {dep}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {architectureData.dataFlow && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Data Flow</h3>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{architectureData.dataFlow}</p>
+            </div>
+          )}
+
+          {Array.isArray(architectureData.integrationPoints) && architectureData.integrationPoints.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Integration Points</h3>
+              <ul className="space-y-1 text-sm text-gray-700">
+                {architectureData.integrationPoints.map((item: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <span className="text-blue-500 mt-0.5">•</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {Array.isArray(architectureData.technicalDecisions) && architectureData.technicalDecisions.length > 0 && (
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Technical Decisions</h3>
+              <div className="space-y-3">
+                {architectureData.technicalDecisions.map((decision: any, i: number) => (
+                  <div key={i} className="border border-gray-200 rounded p-3">
+                    <div className="font-medium text-gray-900">{decision.decision}</div>
+                    <p className="text-sm text-gray-700 mt-1">{decision.rationale}</p>
+                    {Array.isArray(decision.alternatives) && decision.alternatives.length > 0 && (
+                      <div className="mt-2 text-xs text-gray-500">
+                        Alternatives: {decision.alternatives.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500">
+            Generated: {new Date(architectureArtifact.createdAt).toLocaleString()}
+          </div>
+        </div>
+      )}
+
       {/* Multi-repo topology */}
       <div className="bg-white rounded-lg border border-gray-200 p-4">
         <h3 className="text-sm font-medium text-gray-900 mb-4 flex items-center gap-2">

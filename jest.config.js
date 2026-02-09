@@ -3,6 +3,15 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   testMatch: ['**/test/**/*.spec.ts'],
+  collectCoverageFrom: [
+    'apps/**/src/**/*.{ts,tsx}',
+    'packages/**/src/**/*.{ts,tsx}',
+    '!**/*.d.ts',
+    '!**/dist/**',
+    '!**/node_modules/**'
+  ],
+  coverageDirectory: '<rootDir>/coverage',
+  coverageReporters: ['text', 'lcov', 'json-summary'],
   moduleNameMapper: {
     '^@core$': '<rootDir>/packages/core/src/index',
     '^@core/(.*)$': '<rootDir>/packages/core/src/$1',

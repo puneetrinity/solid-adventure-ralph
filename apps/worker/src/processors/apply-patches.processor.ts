@@ -32,6 +32,13 @@ export class ApplyPatchesProcessor extends WorkerHost {
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
+    if (workflow.stage === 'pr' && workflow.stageStatus === 'pending') {
+      await this.prisma.workflow.update({
+        where: { id: workflowId },
+        data: { stageStatus: 'processing', stageUpdatedAt: new Date() }
+      });
+    }
+
     // Validate patchSet belongs to this workflow
     const patchSet = await this.prisma.patchSet.findUnique({
       where: { id: patchSetId }
@@ -108,6 +115,22 @@ export class ApplyPatchesProcessor extends WorkerHost {
           }
         }
       });
+
+      if (workflow.stage === 'pr') {
+        const remaining = await this.prisma.patchSet.count({
+          where: {
+            workflowId,
+            status: { not: 'applied' }
+          }
+        });
+
+        if (remaining === 0) {
+          await this.prisma.workflow.update({
+            where: { id: workflowId },
+            data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+          });
+        }
+      }
 
       // Record run completion
       await this.runRecorder.completeRun({

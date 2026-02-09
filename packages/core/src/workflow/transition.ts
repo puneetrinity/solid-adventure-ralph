@@ -272,6 +272,35 @@ export function transition(
     return result('NEEDS_HUMAN', [], `Feasibility analysis failed: ${event.error}`);
   }
 
+  // Handle architecture job completion
+  if (event.type === 'E_JOB_COMPLETED' && event.stage === 'architecture') {
+    return result(current, [], 'Architecture analysis completed, awaiting user approval');
+  }
+
+  if (event.type === 'E_JOB_FAILED' && event.stage === 'architecture') {
+    return result('NEEDS_HUMAN', [], `Architecture analysis failed: ${event.error}`);
+  }
+
+  // Handle timeline job completion
+  if (event.type === 'E_JOB_COMPLETED' && event.stage === 'timeline') {
+    return result(current, [], 'Timeline analysis completed, awaiting user approval');
+  }
+
+  if (event.type === 'E_JOB_FAILED' && event.stage === 'timeline') {
+    return result('NEEDS_HUMAN', [], `Timeline analysis failed: ${event.error}`);
+  }
+
+  // Handle patches (ingest_context) job completion - gated pipeline path
+  // Note: ingest_context processor emits stage: 'ingest_context', not 'patches'
+  // The legacy handler at line ~75 handles INGESTED state; this handles gated pipeline
+  if (event.type === 'E_JOB_COMPLETED' && event.stage === 'ingest_context' && current !== 'INGESTED') {
+    return result(current, [], 'Patches generated, awaiting user approval');
+  }
+
+  if (event.type === 'E_JOB_FAILED' && event.stage === 'ingest_context' && current !== 'INGESTED') {
+    return result('NEEDS_HUMAN', [], `Patch generation failed: ${event.error}`);
+  }
+
   // Stage approval - triggers next stage's processor
   if (event.type === 'E_STAGE_APPROVED') {
     const nextStageJobs = getJobsForStage(event.nextStage, ctx.workflowId);
