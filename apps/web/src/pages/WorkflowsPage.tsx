@@ -92,11 +92,6 @@ export function WorkflowsPage() {
     return date.toLocaleString();
   };
 
-  const shortenSha = (sha: string | null) => {
-    if (!sha) return '-';
-    return sha.substring(0, 7);
-  };
-
   useEffect(() => {
     if (!showCreateModal || reposLoading || availableRepos.length > 0) return;
     setReposLoading(true);
