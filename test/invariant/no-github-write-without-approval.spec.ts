@@ -14,8 +14,14 @@ function createMockGitHubClient() {
     getRepository: jest.fn(stub.getRepository.bind(stub)),
     getFileContents: jest.fn(stub.getFileContents.bind(stub)),
     getBranch: jest.fn(stub.getBranch.bind(stub)),
+    getTree: jest.fn(stub.getTree.bind(stub)),
+    dispatchWorkflow: jest.fn(stub.dispatchWorkflow.bind(stub)),
+    listWorkflowRuns: jest.fn(stub.listWorkflowRuns.bind(stub)),
+    getWorkflowRun: jest.fn(stub.getWorkflowRun.bind(stub)),
+    getWorkflowRunJobs: jest.fn(stub.getWorkflowRunJobs.bind(stub)),
     createBranch: jest.fn(stub.createBranch.bind(stub)),
     updateFile: jest.fn(stub.updateFile.bind(stub)),
+    deleteFile: jest.fn(stub.deleteFile.bind(stub)),
     openPullRequest: jest.fn(stub.openPullRequest.bind(stub))
   } as GitHubClient & { openPullRequest: jest.Mock };
 }

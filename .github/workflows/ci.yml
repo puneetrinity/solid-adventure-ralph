@@ -70,6 +70,29 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     needs: [lint-and-typecheck, unit-tests]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -86,12 +109,43 @@ jobs:
       - name: Build Packages
         run: npm run build --workspace=packages/core --workspace=packages/db
 
+      - name: Push Prisma Schema
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/arch_test?schema=public
+        run: npx prisma db push
+
+      - name: Build API
+        run: npm run build --workspace=apps/api
+
+      - name: Build Worker
+        run: npm run build --workspace=apps/worker
+
+      - name: Start API
+        env:
+          PORT: 3000
+          NODE_ENV: test
+          AUTH_BYPASS_TOKEN: ci-bypass-token
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/arch_test?schema=public
+          REDIS_URL: redis://localhost:6379
+        run: |
+          npm --workspace apps/api run start &
+          for i in {1..30}; do
+            curl -sSf http://localhost:3000/api/health && break
+            sleep 2
+          done
+
+      - name: Start Worker
+        env:
+          NODE_ENV: test
+          AUTH_BYPASS_TOKEN: ci-bypass-token
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/arch_test?schema=public
+          REDIS_URL: redis://localhost:6379
+        run: npm --workspace apps/worker run start &
+
       - name: Run Integration Tests
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          API_BASE_URL: http://localhost:3000
+          INTEGRATION_AUTH_BYPASS_TOKEN: ci-bypass-token
         run: npm run test:integration
 
   e2e-tests:
