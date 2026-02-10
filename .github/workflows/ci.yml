@@ -127,6 +127,7 @@ jobs:
           AUTH_BYPASS_TOKEN: ci-bypass-token
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/arch_test?schema=public
           REDIS_URL: redis://localhost:6379
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           npm --workspace apps/api run start &
           for i in {1..30}; do
@@ -140,6 +141,7 @@ jobs:
           AUTH_BYPASS_TOKEN: ci-bypass-token
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/arch_test?schema=public
           REDIS_URL: redis://localhost:6379
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: npm --workspace apps/worker run start &
 
       - name: Run Integration Tests
