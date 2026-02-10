@@ -55,6 +55,11 @@ export function transition(
     reason
   });
 
+  // Terminal states - no transitions out (check first to reject all events)
+  if (current === 'DONE' || current === 'FAILED' || current === 'BLOCKED_POLICY' || current === 'NEEDS_HUMAN' || current === 'REJECTED') {
+    return result(current, [], `No transition from terminal state ${current}`);
+  }
+
   // Handle new workflow creation (gated or legacy)
   if (event.type === 'E_WORKFLOW_CREATED') {
     // For gated pipeline (stage=feasibility), start feasibility analysis
@@ -290,6 +295,15 @@ export function transition(
     return result('NEEDS_HUMAN', [], `Timeline analysis failed: ${event.error}`);
   }
 
+  // Handle summary job completion
+  if (event.type === 'E_JOB_COMPLETED' && event.stage === 'summary') {
+    return result(current, [], 'Summary analysis completed, awaiting user approval');
+  }
+
+  if (event.type === 'E_JOB_FAILED' && event.stage === 'summary') {
+    return result('NEEDS_HUMAN', [], `Summary analysis failed: ${event.error}`);
+  }
+
   // Handle patches (ingest_context) job completion - gated pipeline path
   // Note: ingest_context processor emits stage: 'ingest_context', not 'patches'
   // The legacy handler at line ~75 handles INGESTED state; this handles gated pipeline
@@ -358,13 +372,33 @@ export function transition(
 
   // Stage changes requested - processor will re-run
   if (event.type === 'E_STAGE_CHANGES_REQUESTED') {
+    // Special handling for policy stage - re-evaluate all patch sets
+    if (event.stage === 'policy') {
+      const patchSetIds = ctx.patchSetsNeedingPolicy?.length
+        ? ctx.patchSetsNeedingPolicy
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      if (patchSetIds.length > 0) {
+        const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+          queue: 'workflow',
+          name: 'evaluate_policy',
+          payload: { workflowId: ctx.workflowId, patchSetId }
+        }));
+        return result(current, jobs, `Changes requested for policy: ${event.reason}, re-evaluating ${patchSetIds.length} patch set(s)`);
+      }
+    }
+
+    // Special handling for patches stage - re-run ingest_context
+    if (event.stage === 'patches') {
+      return result(current, [
+        { queue: 'workflow', name: 'ingest_context', payload: { workflowId: ctx.workflowId } }
+      ], `Changes requested for patches: ${event.reason}, re-generating patches`);
+    }
+
     const rerunJobs = getJobsForStage(event.stage, ctx.workflowId);
     return result(current, rerunJobs, `Changes requested for ${event.stage}: ${event.reason}`);
-  }
-
-  // Terminal states - no transitions out
-  if (current === 'DONE' || current === 'FAILED' || current === 'BLOCKED_POLICY' || current === 'NEEDS_HUMAN' || current === 'REJECTED') {
-    return result(current, [], `No transition from terminal state ${current}`);
   }
 
   // Default: stay in current state (unknown event)
@@ -382,6 +416,8 @@ function getJobsForStage(stage: GatedStage, workflowId: string): EnqueueJob[] {
       return [{ queue: 'workflow', name: 'architecture_analysis', payload: { workflowId } }];
     case 'timeline':
       return [{ queue: 'workflow', name: 'timeline_analysis', payload: { workflowId } }];
+    case 'summary':
+      return [{ queue: 'workflow', name: 'summary_analysis', payload: { workflowId } }];
     case 'patches':
       // Patches stage uses ingest_context (legacy name)
       return [{ queue: 'workflow', name: 'ingest_context', payload: { workflowId } }];

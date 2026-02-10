@@ -8,6 +8,9 @@ import {
   RunRecorder,
   LLMRunner,
   createGroqProvider,
+  ArchitectureAnalysisSchema,
+  safeParseLLMResponse,
+  SCHEMA_DESCRIPTIONS,
 } from '@arch-orchestrator/core';
 
 interface ArchitectureJobData {
@@ -159,30 +162,61 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
         });
 
         if (response.success && response.rawContent) {
-          try {
-            let jsonContent = response.rawContent.trim();
-            if (jsonContent.startsWith('```')) {
-              jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
-            }
-            const parsed = JSON.parse(jsonContent);
+          // Try Zod validation first
+          const zodResult = safeParseLLMResponse(response.rawContent, ArchitectureAnalysisSchema);
 
+          if (zodResult.success) {
+            const parsed = zodResult.data;
             artifact = {
               kind: 'ArchitectureV1',
-              overview: parsed.overview || 'Architecture analysis completed',
-              components: Array.isArray(parsed.components) ? parsed.components : [],
+              overview: parsed.summary,
+              components: (parsed.components || []).map(c => ({
+                name: c.name,
+                description: c.purpose,
+                files: [],
+                dependencies: c.dependencies || []
+              })),
               dataFlow: parsed.dataFlow || '',
-              integrationPoints: Array.isArray(parsed.integrationPoints) ? parsed.integrationPoints : [],
-              technicalDecisions: Array.isArray(parsed.technicalDecisions) ? parsed.technicalDecisions : [],
+              integrationPoints: [],
+              technicalDecisions: (parsed.decisions || []).map(d => ({
+                decision: d.decision,
+                rationale: d.rationale,
+                alternatives: (d.alternatives || []).map(a => a.option)
+              })),
               inputs: {
                 featureGoal: workflow.featureGoal || workflow.goal || '',
                 feasibilityRecommendation: feasibilityData.recommendation || 'unknown'
               }
             };
+            this.logger.log(`Architecture analysis complete (Zod validated): ${artifact.components.length} components`);
+          } else {
+            // Fallback to legacy parsing
+            this.logger.warn(`Zod validation failed, falling back to legacy parsing: ${zodResult.error}`);
+            try {
+              let jsonContent = response.rawContent.trim();
+              if (jsonContent.startsWith('```')) {
+                jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+              }
+              const parsed = JSON.parse(jsonContent);
 
-            this.logger.log(`Architecture analysis complete: ${artifact.components.length} components`);
-          } catch (parseErr) {
-            this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
-            throw new Error(`Failed to parse architecture analysis: ${parseErr}`);
+              artifact = {
+                kind: 'ArchitectureV1',
+                overview: parsed.overview || 'Architecture analysis completed',
+                components: Array.isArray(parsed.components) ? parsed.components : [],
+                dataFlow: parsed.dataFlow || '',
+                integrationPoints: Array.isArray(parsed.integrationPoints) ? parsed.integrationPoints : [],
+                technicalDecisions: Array.isArray(parsed.technicalDecisions) ? parsed.technicalDecisions : [],
+                inputs: {
+                  featureGoal: workflow.featureGoal || workflow.goal || '',
+                  feasibilityRecommendation: feasibilityData.recommendation || 'unknown'
+                }
+              };
+
+              this.logger.log(`Architecture analysis complete (legacy): ${artifact.components.length} components`);
+            } catch (parseErr) {
+              this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
+              throw new Error(`Failed to parse architecture analysis: ${parseErr}`);
+            }
           }
         } else {
           throw new Error(`LLM call failed: ${response.error}`);

@@ -4,6 +4,7 @@ import { parseRedisUrl } from './redis';
 import { IngestContextProcessor } from './processors/ingest-context.processor';
 import { ApplyPatchesProcessor } from './processors/apply-patches.processor';
 import { EvaluatePolicyProcessor } from './processors/evaluate-policy.processor';
+import { SummaryAnalysisProcessor } from './processors/summary-analysis.processor';
 import { OrchestrateProcessor } from './processors/orchestrate.processor';
 import { RefreshContextProcessor } from './processors/refresh-context.processor';
 import { FeasibilityAnalysisProcessor } from './processors/feasibility-analysis.processor';
@@ -151,7 +152,8 @@ function createGitHubClient(): GitHubClient {
     BullModule.registerQueue({ name: 'refresh_context' }),
     BullModule.registerQueue({ name: 'feasibility' }),
     BullModule.registerQueue({ name: 'architecture' }),
-    BullModule.registerQueue({ name: 'timeline' })
+    BullModule.registerQueue({ name: 'timeline' }),
+    BullModule.registerQueue({ name: 'summary' })
   ],
   providers: [
     // Orchestrator (Phase 3)
@@ -162,6 +164,7 @@ function createGitHubClient(): GitHubClient {
     FeasibilityAnalysisProcessor,
     ArchitectureAnalysisProcessor,
     TimelineAnalysisProcessor,
+    SummaryAnalysisProcessor,
     IngestContextProcessor,
     ApplyPatchesProcessor,
     EvaluatePolicyProcessor,

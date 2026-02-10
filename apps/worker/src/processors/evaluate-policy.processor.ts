@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import type { Job, Queue } from 'bullmq';
 import { getPrisma } from '@arch-orchestrator/db';
 import { RunRecorder } from '@arch-orchestrator/core';
+import { createHash } from 'crypto';
 
 @Processor('evaluate_policy')
 export class EvaluatePolicyProcessor extends WorkerHost {
@@ -162,6 +163,56 @@ export class EvaluatePolicyProcessor extends WorkerHost {
         });
       }
 
+      // Create PolicyV1 artifact
+      const policyArtifact = {
+        kind: 'PolicyV1' as const,
+        patchSetId,
+        evaluatedAt: new Date().toISOString(),
+        result: hasBlockingViolations ? 'blocked' : 'passed',
+        summary: hasBlockingViolations
+          ? `Policy evaluation failed: ${violations.filter(v => v.blocking).length} blocking violations`
+          : violations.length > 0
+            ? `Policy evaluation passed with ${warningCount} warnings`
+            : 'Policy evaluation passed with no issues',
+        violations: violations.map(v => ({
+          rule: v.rule,
+          severity: v.blocking ? 'BLOCK' : 'WARN',
+          file: v.file,
+          message: v.message,
+          evidence: v.evidence || null
+        })),
+        stats: {
+          totalViolations: violations.length,
+          blockingViolations: violations.filter(v => v.blocking).length,
+          warnings: warningCount,
+          filesScanned: patchSet.patches.reduce((sum, p) => {
+            const files = Array.isArray(p.files) ? (p.files as { path: string }[]) : [];
+            return sum + files.length;
+          }, 0)
+        }
+      };
+
+      const artifactContent = JSON.stringify(policyArtifact, null, 2);
+      const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');
+
+      // Check for existing PolicyV1 artifact
+      const existingArtifact = await this.prisma.artifact.findFirst({
+        where: { workflowId, kind: 'PolicyV1' },
+        orderBy: { artifactVersion: 'desc' }
+      });
+
+      await this.prisma.artifact.create({
+        data: {
+          workflowId,
+          kind: 'PolicyV1',
+          path: '.ai/POLICY.json',
+          content: artifactContent,
+          contentSha,
+          artifactVersion: existingArtifact ? existingArtifact.artifactVersion + 1 : 1,
+          supersedesArtifactId: existingArtifact?.id || null
+        }
+      });
+
       // Record evaluation result
       await this.prisma.workflowEvent.create({
         data: {
@@ -184,10 +235,6 @@ export class EvaluatePolicyProcessor extends WorkerHost {
 
         let remaining = 0;
         for (const ps of proposedPatchSets) {
-          const hasViolations = await this.prisma.policyViolation.findFirst({
-            where: { patchSetId: ps.id }
-          });
-
           const hasEvalEvent = await this.prisma.workflowEvent.findFirst({
             where: {
               workflowId,
@@ -196,16 +243,32 @@ export class EvaluatePolicyProcessor extends WorkerHost {
             }
           });
 
-          if (!hasEvalEvent && !hasViolations) {
+          if (!hasEvalEvent) {
             remaining += 1;
           }
         }
 
         if (remaining === 0) {
-          await this.prisma.workflow.update({
-            where: { id: workflowId },
-            data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+          // All evaluations complete - check for blocking violations
+          const blockingViolations = await this.prisma.policyViolation.findFirst({
+            where: { workflowId, severity: 'BLOCK' }
           });
+
+          if (blockingViolations) {
+            // Has blocking violations - set to blocked status
+            await this.prisma.workflow.update({
+              where: { id: workflowId },
+              data: { stageStatus: 'blocked', stageUpdatedAt: new Date() }
+            });
+            this.logger.log(`Policy stage set to blocked due to blocking violations`);
+          } else {
+            // No blocking violations - ready for approval
+            await this.prisma.workflow.update({
+              where: { id: workflowId },
+              data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+            });
+            this.logger.log(`Policy stage set to ready - no blocking violations`);
+          }
         }
       }
 

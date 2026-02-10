@@ -8,6 +8,9 @@ import {
   RunRecorder,
   LLMRunner,
   createGroqProvider,
+  FeasibilityAnalysisSchema,
+  safeParseLLMResponse,
+  SCHEMA_DESCRIPTIONS,
 } from '@arch-orchestrator/core';
 
 interface FeasibilityJobData {
@@ -154,32 +157,57 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
         });
 
         if (response.success && response.rawContent) {
-          try {
-            let jsonContent = response.rawContent.trim();
-            if (jsonContent.startsWith('```')) {
-              jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
-            }
-            const parsed = JSON.parse(jsonContent);
+          // Try Zod validation first
+          const zodResult = safeParseLLMResponse(response.rawContent, FeasibilityAnalysisSchema);
 
+          if (zodResult.success) {
+            const parsed = zodResult.data;
             artifact = {
               kind: 'FeasibilityV1',
-              recommendation: parsed.recommendation || 'hold',
-              reasoning: parsed.reasoning || 'Analysis completed',
-              risks: Array.isArray(parsed.risks) ? parsed.risks : [],
-              alternatives: Array.isArray(parsed.alternatives) ? parsed.alternatives : [],
-              unknowns: Array.isArray(parsed.unknowns) ? parsed.unknowns : [],
-              assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
+              recommendation: parsed.recommendation === 'proceed' ? 'proceed' :
+                             parsed.recommendation === 'not_recommended' ? 'reject' : 'hold',
+              reasoning: parsed.summary,
+              risks: (parsed.risks || []).map(r => r.description),
+              alternatives: [],
+              unknowns: parsed.prerequisites || [],
+              assumptions: [],
               repoSummaries,
               inputs: {
                 featureGoal: workflow.featureGoal || workflow.goal || '',
                 businessJustification: workflow.businessJustification || ''
               }
             };
+            this.logger.log(`Feasibility analysis complete (Zod validated): ${artifact.recommendation}`);
+          } else {
+            // Fallback to legacy parsing
+            this.logger.warn(`Zod validation failed, falling back to legacy parsing: ${zodResult.error}`);
+            try {
+              let jsonContent = response.rawContent.trim();
+              if (jsonContent.startsWith('```')) {
+                jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+              }
+              const parsed = JSON.parse(jsonContent);
 
-            this.logger.log(`Feasibility analysis complete: ${artifact.recommendation}`);
-          } catch (parseErr) {
-            this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
-            throw new Error(`Failed to parse feasibility analysis: ${parseErr}`);
+              artifact = {
+                kind: 'FeasibilityV1',
+                recommendation: parsed.recommendation || 'hold',
+                reasoning: parsed.reasoning || 'Analysis completed',
+                risks: Array.isArray(parsed.risks) ? parsed.risks : [],
+                alternatives: Array.isArray(parsed.alternatives) ? parsed.alternatives : [],
+                unknowns: Array.isArray(parsed.unknowns) ? parsed.unknowns : [],
+                assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
+                repoSummaries,
+                inputs: {
+                  featureGoal: workflow.featureGoal || workflow.goal || '',
+                  businessJustification: workflow.businessJustification || ''
+                }
+              };
+
+              this.logger.log(`Feasibility analysis complete (legacy): ${artifact.recommendation}`);
+            } catch (parseErr) {
+              this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
+              throw new Error(`Failed to parse feasibility analysis: ${parseErr}`);
+            }
           }
         } else {
           throw new Error(`LLM call failed: ${response.error}`);

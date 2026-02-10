@@ -9,6 +9,10 @@ import {
   type GitHubClient,
   LLMRunner,
   createGroqProvider,
+  PatchGenerationSchema,
+  safeParseLLMResponse,
+  SCHEMA_DESCRIPTIONS,
+  buildRetryPrompt,
 } from '@arch-orchestrator/core';
 import { GITHUB_CLIENT_TOKEN } from '../constants';
 
@@ -601,17 +605,7 @@ export class IngestContextProcessor extends WorkerHost {
       'Your previous response was invalid JSON.',
       'Return ONLY a valid JSON object with the exact schema below. No markdown, no commentary.',
       '',
-      '{',
-      '  "title": "Short title for the change (max 50 chars)",',
-      '  "summary": "Brief description of what this change does",',
-      '  "files": [',
-      '    {',
-      '      "path": "relative/path/to/file.ts",',
-      '      "action": "create" | "modify" | "delete",',
-      '      "content": "complete new file content (not needed for delete)"',
-      '    }',
-      '  ]',
-      '}',
+      SCHEMA_DESCRIPTIONS.patch,
       '',
       'Here is your previous output. Fix it into valid JSON:',
       raw
@@ -636,20 +630,27 @@ export class IngestContextProcessor extends WorkerHost {
   }
 
   private tryParseLLMResponse(raw: string): { parsed: LLMPatchResponse | null; error?: string } {
+    // Use Zod schema for validation
+    const result = safeParseLLMResponse(raw, PatchGenerationSchema);
+    if (result.success) {
+      return { parsed: result.data };
+    }
+
+    // Fallback to legacy validation for backwards compatibility
     try {
       let jsonContent = this.extractJsonBlock(raw);
       if (!jsonContent) {
-        return { parsed: null, error: 'No JSON object found' };
+        return { parsed: null, error: result.error || 'No JSON object found' };
       }
       jsonContent = this.sanitizeJsonString(jsonContent);
       const rawParsed = JSON.parse(jsonContent);
       const parsed = this.validateLLMResponse(rawParsed);
       if (!parsed) {
-        return { parsed: null, error: 'Invalid response structure' };
+        return { parsed: null, error: result.error || 'Invalid response structure' };
       }
       return { parsed };
     } catch (err: any) {
-      return { parsed: null, error: String(err?.message ?? err) };
+      return { parsed: null, error: result.error || String(err?.message ?? err) };
     }
   }
 

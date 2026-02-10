@@ -97,6 +97,9 @@ export async function loadTransitionContext(
     }
   }
 
+  // For re-runs, we need all proposed patch set IDs
+  const allProposedPatchSetIds = proposedPatchSets.map(ps => ps.id);
+
   return {
     workflowId,
     hasPatchSets,
@@ -112,7 +115,9 @@ export async function loadTransitionContext(
       approved: approvedPatchSets.length,
       applied: appliedPatchSets.length
     },
-    patchSetsNeedingPolicy,
+    patchSetsNeedingPolicy: patchSetsNeedingPolicy.length > 0
+      ? patchSetsNeedingPolicy
+      : allProposedPatchSetIds, // Fall back to all proposed for re-runs
     patchSetsNeedingApproval,
     approvedPatchSetIds: approvedPatchSets.map(ps => ps.id),
     allPatchSetsApplied: hasPatchSets && appliedPatchSets.length === patchSets.length,

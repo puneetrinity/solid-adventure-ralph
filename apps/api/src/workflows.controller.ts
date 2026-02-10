@@ -201,4 +201,22 @@ export class WorkflowsController {
   async delete(@Param('id') id: string) {
     return this.workflows.delete(id);
   }
+
+  @Get(':id/tasks')
+  @ApiOperation({ summary: 'Get workflow tasks', description: 'Get all tasks for a workflow' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiResponse({ status: 200, description: 'List of tasks' })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async getTasks(@Param('id') id: string) {
+    return this.workflows.getTasks(id);
+  }
+
+  @Get(':id/costs')
+  @ApiOperation({ summary: 'Get workflow costs', description: 'Get token usage and cost summary for a workflow' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiResponse({ status: 200, description: 'Cost summary with breakdown by job and role' })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async getCosts(@Param('id') id: string) {
+    return this.workflows.getCostSummary(id);
+  }
 }

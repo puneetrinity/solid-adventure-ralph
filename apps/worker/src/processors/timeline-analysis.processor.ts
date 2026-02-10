@@ -8,6 +8,9 @@ import {
   RunRecorder,
   LLMRunner,
   createGroqProvider,
+  TimelineAnalysisSchema,
+  safeParseLLMResponse,
+  SCHEMA_DESCRIPTIONS,
 } from '@arch-orchestrator/core';
 
 interface TimelineJobData {
@@ -203,6 +206,9 @@ export class TimelineAnalysisProcessor extends WorkerHost {
 
             const totalTasks = artifact.phases.reduce((sum, p) => sum + (p.tasks?.length || 0), 0);
             this.logger.log(`Timeline analysis complete: ${artifact.phases.length} phases, ${totalTasks} tasks`);
+
+            // Save tasks to WorkflowTask table
+            await this.saveTasks(workflowId, artifact.phases);
           } catch (parseErr) {
             this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
             throw new Error(`Failed to parse timeline analysis: ${parseErr}`);
@@ -307,6 +313,61 @@ export class TimelineAnalysisProcessor extends WorkerHost {
       });
 
       throw error;
+    }
+  }
+
+  /**
+   * Save parsed tasks to WorkflowTask table for structured tracking.
+   */
+  private async saveTasks(
+    workflowId: string,
+    phases: TimelineArtifact['phases']
+  ): Promise<void> {
+    // Delete existing tasks for this workflow (re-run case)
+    await this.prisma.workflowTask.deleteMany({
+      where: { workflowId }
+    });
+
+    // Flatten all tasks from phases
+    const tasksToCreate = phases.flatMap((phase, phaseIndex) =>
+      (phase.tasks || []).map((task, taskIndex) => ({
+        workflowId,
+        taskId: task.id || `T${String(phaseIndex + 1).padStart(2, '0')}${String(taskIndex + 1).padStart(2, '0')}`,
+        title: task.title || 'Untitled task',
+        description: task.description || '',
+        type: 'feature' as const,
+        priority: this.complexityToPriority(task.estimatedComplexity),
+        complexity: this.mapComplexity(task.estimatedComplexity),
+        status: 'pending' as const,
+        dependencies: JSON.stringify(task.dependencies || []),
+        files: JSON.stringify(task.files || []),
+        acceptanceCriteria: JSON.stringify([])
+      }))
+    );
+
+    if (tasksToCreate.length > 0) {
+      await this.prisma.workflowTask.createMany({
+        data: tasksToCreate
+      });
+      this.logger.log(`Saved ${tasksToCreate.length} tasks to WorkflowTask table`);
+    }
+  }
+
+  private complexityToPriority(complexity: string): string {
+    switch (complexity) {
+      case 'high': return 'high';
+      case 'medium': return 'medium';
+      case 'low': return 'low';
+      default: return 'medium';
+    }
+  }
+
+  private mapComplexity(complexity: string): string {
+    switch (complexity) {
+      case 'high': return 'large';
+      case 'medium': return 'medium';
+      case 'low': return 'small';
+      default: return 'medium';
     }
   }
 }

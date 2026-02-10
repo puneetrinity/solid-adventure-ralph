@@ -32,7 +32,7 @@ import {
   Rocket,
 } from 'lucide-react';
 import { useWorkflow } from '../hooks/use-workflow';
-import { WorkflowStatusBadge } from '../components/workflow';
+import { WorkflowStatusBadge, CostSummary } from '../components/workflow';
 import { Modal } from '../components/ui';
 import { api } from '../api/client';
 import type {
@@ -70,7 +70,7 @@ export function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { workflow, isLoading, error, refetch, isPolling, lastUpdated } = useWorkflow(id!);
-  const [activeTab, setActiveTab] = useState<'overview' | 'feasibility' | 'architecture' | 'timeline' | 'artifacts' | 'policy' | 'patches' | 'runs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'feasibility' | 'architecture' | 'timeline' | 'summary' | 'artifacts' | 'policy' | 'patches' | 'runs'>('overview');
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -471,6 +471,7 @@ export function WorkflowDetailPage() {
         <StagePipeline
           stage={workflow.stage}
           stageStatus={workflow.stageStatus || 'pending'}
+          hasBlockingViolations={workflow.policyViolations?.some(v => v.severity === 'BLOCK') ?? false}
           onApprove={handleStageApprove}
           onReject={() => setShowStageRejectModal(true)}
           onRequestChanges={() => setShowStageChangesModal(true)}
@@ -682,7 +683,7 @@ export function WorkflowDetailPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-4">
-          {(['overview', 'feasibility', 'architecture', 'timeline', 'artifacts', 'policy', 'patches', 'runs'] as const).map(tab => {
+          {(['overview', 'feasibility', 'architecture', 'timeline', 'summary', 'artifacts', 'policy', 'patches', 'runs'] as const).map(tab => {
             const hasViolations = tab === 'policy' && (workflow.policyViolations?.length ?? 0) > 0;
             const hasBlockingViolations = tab === 'policy' && workflow.policyViolations?.some(v => v.severity === 'BLOCK');
             const runsCount = tab === 'runs' ? (workflow.runs?.length ?? 0) : 0;
@@ -690,7 +691,7 @@ export function WorkflowDetailPage() {
             const hasFeasibility = tab === 'feasibility' && workflow.artifacts?.some(a => a.kind === 'FeasibilityV1');
 
             // Gate-locking: determine which tabs are accessible based on current stage
-            const stageOrder = ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr', 'done'];
+            const stageOrder = ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'pr', 'done'];
             const currentStageIndex = workflow.stage ? stageOrder.indexOf(workflow.stage) : 0;
 
             // Map tabs to stage requirements
@@ -699,9 +700,10 @@ export function WorkflowDetailPage() {
               'feasibility': 0,
               'architecture': 1,
               'timeline': 2,
+              'summary': 3,
               'artifacts': -1, // Always accessible
-              'policy': 4,
-              'patches': 3,
+              'patches': 4,
+              'policy': 5,
               'runs': -1,  // Always accessible
             };
 
@@ -709,7 +711,8 @@ export function WorkflowDetailPage() {
             const isLocked = tabRequiredStage > 0 && currentStageIndex < tabRequiredStage;
             const hasArtifact = tab === 'feasibility' ? workflow.artifacts?.some(a => a.kind === 'FeasibilityV1') :
                               tab === 'architecture' ? workflow.artifacts?.some(a => a.kind === 'ArchitectureV1') :
-                              tab === 'timeline' ? workflow.artifacts?.some(a => a.kind === 'TimelineV1') : false;
+                              tab === 'timeline' ? workflow.artifacts?.some(a => a.kind === 'TimelineV1') :
+                              tab === 'summary' ? workflow.artifacts?.some(a => a.kind === 'SummaryV1') : false;
 
             return (
               <button
@@ -761,6 +764,7 @@ export function WorkflowDetailPage() {
         {activeTab === 'feasibility' && <FeasibilityTab workflow={workflow} />}
         {activeTab === 'architecture' && <ArchitectureTab workflow={workflow} />}
         {activeTab === 'timeline' && <TimelineTab workflow={workflow} />}
+        {activeTab === 'summary' && <SummaryTab workflow={workflow} />}
         {activeTab === 'artifacts' && <ArtifactsTab artifacts={workflow.artifacts || []} />}
         {activeTab === 'policy' && <PolicyTab violations={workflow.policyViolations || []} />}
         {activeTab === 'patches' && (
@@ -771,7 +775,7 @@ export function WorkflowDetailPage() {
             onRefetch={refetch}
           />
         )}
-        {activeTab === 'runs' && <RunsTab runs={workflow.runs || []} />}
+        {activeTab === 'runs' && <RunsTab workflowId={workflow.id} runs={workflow.runs || []} />}
       </div>
     </div>
   );
@@ -1297,6 +1301,162 @@ function ArtifactsTab({ artifacts }: { artifacts: Artifact[] }) {
   );
 }
 
+function SummaryTab({ workflow }: { workflow: Workflow }) {
+  const summaryArtifact = workflow.artifacts?.find(a => a.kind === 'SummaryV1');
+
+  let data: any = null;
+  if (summaryArtifact) {
+    try {
+      data = JSON.parse(summaryArtifact.content);
+    } catch {
+      data = null;
+    }
+  }
+
+  if (!summaryArtifact || !data) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 p-6 text-center text-gray-500">
+        No summary yet. Approve timeline to generate it.
+      </div>
+    );
+  }
+
+  const recommendation = data.recommendation || 'hold';
+  const recommendationClass =
+    recommendation === 'proceed'
+      ? 'bg-green-100 text-green-700'
+      : 'bg-yellow-100 text-yellow-700';
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-900">Overview</h3>
+          <span className={`text-xs font-medium px-2 py-1 rounded ${recommendationClass}`}>
+            {recommendation}
+          </span>
+        </div>
+        <p className="text-sm text-gray-700 whitespace-pre-wrap">{data.overview}</p>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {Array.isArray(data.pros) && data.pros.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">Pros</h3>
+            <ul className="space-y-2">
+              {data.pros.map((item: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-green-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {Array.isArray(data.cons) && data.cons.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">Cons</h3>
+            <ul className="space-y-2">
+              {data.cons.map((item: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-red-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {Array.isArray(data.scope) && data.scope.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">Scope</h3>
+            <ul className="space-y-2">
+              {data.scope.map((item: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-blue-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {Array.isArray(data.risks) && data.risks.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">Risks</h3>
+            <ul className="space-y-2">
+              {data.risks.map((item: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-red-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {Array.isArray(data.tests) && data.tests.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">Tests</h3>
+            <ul className="space-y-2">
+              {data.tests.map((item: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-purple-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {Array.isArray(data.dependencies) && data.dependencies.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">Dependencies</h3>
+            <ul className="space-y-2">
+              {data.dependencies.map((item: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 text-sm">
+                  <span className="text-gray-500 mt-0.5">•</span>
+                  <span className="text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {Array.isArray(data.links) && data.links.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <h3 className="text-sm font-medium text-gray-900 mb-3">Links</h3>
+          <ul className="space-y-2">
+            {data.links.map((link: string, i: number) => (
+              <li key={i} className="text-sm">
+                <a
+                  href={link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline flex items-center gap-1"
+                >
+                  {link}
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-500">
+        <span>Generated: {new Date(summaryArtifact.createdAt).toLocaleString()}</span>
+      </div>
+    </div>
+  );
+}
+
 function PolicyTab({ violations }: { violations: PolicyViolation[] }) {
   if (violations.length === 0) {
     return (
@@ -1726,7 +1886,7 @@ function PatchSetsTab({
   );
 }
 
-function RunsTab({ runs }: { runs: WorkflowRun[] }) {
+function RunsTab({ workflowId, runs }: { workflowId: string; runs: WorkflowRun[] }) {
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   if (runs.length === 0) {
@@ -1746,6 +1906,9 @@ function RunsTab({ runs }: { runs: WorkflowRun[] }) {
 
   return (
     <div className="space-y-4">
+      {/* Cost Summary */}
+      <CostSummary workflowId={workflowId} />
+
       {/* Summary stats */}
       <div className="grid grid-cols-4 gap-4">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -1892,6 +2055,7 @@ const STAGES: { key: GatedStage; label: string; icon: typeof Lightbulb }[] = [
   { key: 'feasibility', label: 'Feasibility', icon: Lightbulb },
   { key: 'architecture', label: 'Architecture', icon: Boxes },
   { key: 'timeline', label: 'Timeline', icon: CalendarClock },
+  { key: 'summary', label: 'Summary', icon: FileText },
   { key: 'patches', label: 'Patches', icon: FileDiff },
   { key: 'policy', label: 'Policy', icon: Shield },
   { key: 'pr', label: 'PR', icon: Rocket },
@@ -1900,6 +2064,7 @@ const STAGES: { key: GatedStage; label: string; icon: typeof Lightbulb }[] = [
 function StagePipeline({
   stage,
   stageStatus,
+  hasBlockingViolations,
   onApprove,
   onReject,
   onRequestChanges,
@@ -1908,6 +2073,7 @@ function StagePipeline({
 }: {
   stage: GatedStage;
   stageStatus: StageStatus;
+  hasBlockingViolations: boolean;
   onApprove: () => void;
   onReject: () => void;
   onRequestChanges: () => void;
@@ -1916,7 +2082,8 @@ function StagePipeline({
 }) {
   const currentIndex = STAGES.findIndex(s => s.key === stage);
   const isTerminal = stage === 'done' || stageStatus === 'rejected';
-  const canTakeAction = stageStatus === 'ready' && !isLoading;
+  const isPolicyBlocked = stage === 'policy' && hasBlockingViolations;
+  const canTakeAction = stageStatus === 'ready' && !isLoading && !isPolicyBlocked;
   const canRetry = (stageStatus === 'needs_changes' || stageStatus === 'blocked') && !isLoading;
 
   return (
@@ -1927,41 +2094,46 @@ function StagePipeline({
           const Icon = s.icon;
           const isPast = idx < currentIndex;
           const isCurrent = s.key === stage;
+          const isPolicyStageBlocked = s.key === 'policy' && isCurrent && isPolicyBlocked;
 
           let statusClass = 'bg-gray-100 text-gray-400 border-gray-200';
-          let dotClass = 'bg-gray-300';
+          let showCheckmark = false;
 
           if (isPast || (isCurrent && stageStatus === 'approved')) {
             statusClass = 'bg-green-50 text-green-700 border-green-200';
-            dotClass = 'bg-green-500';
+            showCheckmark = true;
           } else if (isCurrent) {
-            if (stageStatus === 'processing') {
-              statusClass = 'bg-blue-50 text-blue-700 border-blue-200';
-              dotClass = 'bg-blue-500 animate-pulse';
+            if (isPolicyStageBlocked) {
+              statusClass = 'bg-red-50 text-red-700 border-red-300 ring-2 ring-red-200';
+            } else if (stageStatus === 'processing') {
+              statusClass = 'bg-blue-50 text-blue-700 border-blue-300 ring-2 ring-blue-200';
             } else if (stageStatus === 'ready') {
-              statusClass = 'bg-yellow-50 text-yellow-700 border-yellow-200';
-              dotClass = 'bg-yellow-500';
+              statusClass = 'bg-yellow-50 text-yellow-700 border-yellow-300 ring-2 ring-yellow-200';
             } else if (stageStatus === 'rejected') {
-              statusClass = 'bg-red-50 text-red-700 border-red-200';
-              dotClass = 'bg-red-500';
+              statusClass = 'bg-red-50 text-red-700 border-red-300 ring-2 ring-red-200';
             } else if (stageStatus === 'blocked' || stageStatus === 'needs_changes') {
-              statusClass = 'bg-orange-50 text-orange-700 border-orange-200';
-              dotClass = 'bg-orange-500';
+              statusClass = 'bg-orange-50 text-orange-700 border-orange-300 ring-2 ring-orange-200';
             } else {
               statusClass = 'bg-gray-100 text-gray-600 border-gray-300';
-              dotClass = 'bg-gray-400';
             }
           }
 
           return (
             <div key={s.key} className="flex items-center flex-1">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border ${statusClass}`}>
-                <div className={`w-2 h-2 rounded-full ${dotClass}`} />
-                <Icon className="h-4 w-4" />
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border transition-all ${statusClass}`}>
+                {showCheckmark ? (
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                ) : isCurrent && stageStatus === 'processing' ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : isPolicyStageBlocked ? (
+                  <ShieldAlert className="h-4 w-4" />
+                ) : (
+                  <Icon className="h-4 w-4" />
+                )}
                 <span className="hidden sm:inline font-medium">{s.label}</span>
               </div>
               {idx < STAGES.length - 1 && (
-                <div className={`flex-1 h-0.5 mx-2 ${isPast ? 'bg-green-300' : 'bg-gray-200'}`} />
+                <div className={`flex-1 h-0.5 mx-2 transition-colors ${isPast ? 'bg-green-400' : 'bg-gray-200'}`} />
               )}
             </div>
           );
@@ -1971,7 +2143,9 @@ function StagePipeline({
       {/* Current stage info and actions */}
       {!isTerminal && (
         <div className={`rounded-lg p-4 ${
-          stageStatus === 'ready'
+          stageStatus === 'ready' && isPolicyBlocked
+            ? 'bg-red-50 border border-red-200'
+            : stageStatus === 'ready'
             ? 'bg-yellow-50 border border-yellow-200'
             : stageStatus === 'processing'
             ? 'bg-blue-50 border border-blue-200'
@@ -1984,7 +2158,10 @@ function StagePipeline({
               {stageStatus === 'processing' && (
                 <RefreshCw className="h-5 w-5 text-blue-500 animate-spin" />
               )}
-              {stageStatus === 'ready' && (
+              {stageStatus === 'ready' && isPolicyBlocked && (
+                <ShieldAlert className="h-5 w-5 text-red-500" />
+              )}
+              {stageStatus === 'ready' && !isPolicyBlocked && (
                 <AlertCircle className="h-5 w-5 text-yellow-500" />
               )}
               {stageStatus === 'needs_changes' && (
@@ -1998,25 +2175,29 @@ function StagePipeline({
               )}
               <div>
                 <h3 className={`text-sm font-medium ${
+                  stageStatus === 'ready' && isPolicyBlocked ? 'text-red-800' :
                   stageStatus === 'ready' ? 'text-yellow-800' :
                   stageStatus === 'processing' ? 'text-blue-800' :
                   stageStatus === 'needs_changes' ? 'text-orange-800' :
                   'text-gray-700'
                 }`}>
-                  {stageStatus === 'ready' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} analysis ready for review`}
+                  {stageStatus === 'ready' && isPolicyBlocked && 'Policy has blocking violations'}
+                  {stageStatus === 'ready' && !isPolicyBlocked && `${stage.charAt(0).toUpperCase() + stage.slice(1)} analysis ready for review`}
                   {stageStatus === 'processing' && `Running ${stage} analysis...`}
                   {stageStatus === 'needs_changes' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage needs changes`}
                   {stageStatus === 'blocked' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage blocked`}
                   {stageStatus === 'pending' && `Waiting to start ${stage} stage`}
                 </h3>
                 <p className={`text-sm ${
+                  stageStatus === 'ready' && isPolicyBlocked ? 'text-red-700' :
                   stageStatus === 'ready' ? 'text-yellow-700' :
                   stageStatus === 'processing' ? 'text-blue-700' :
                   stageStatus === 'needs_changes' ? 'text-orange-700' :
                   stageStatus === 'blocked' ? 'text-orange-700' :
                   'text-gray-500'
                 }`}>
-                  {stageStatus === 'ready' && 'Review the analysis and approve to proceed to the next stage.'}
+                  {stageStatus === 'ready' && isPolicyBlocked && 'Resolve blocking violations in the Policy tab before approving.'}
+                  {stageStatus === 'ready' && !isPolicyBlocked && 'Review the analysis and approve to proceed to the next stage.'}
                   {stageStatus === 'processing' && 'Please wait while the analysis is being generated.'}
                   {stageStatus === 'needs_changes' && 'Update feedback or retry the stage to re-run the analysis.'}
                   {stageStatus === 'blocked' && 'This stage was blocked due to an error. Retry to re-run the analysis.'}
@@ -2068,6 +2249,40 @@ function StagePipeline({
                 >
                   <RefreshCw className="h-4 w-4" />
                   Retry Stage
+                </button>
+              </div>
+            )}
+
+            {/* Policy blocked due to violations */}
+            {isPolicyBlocked && stageStatus === 'ready' && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-red-600 flex items-center gap-1">
+                  <ShieldAlert className="h-4 w-4" />
+                  Approval blocked - resolve violations first
+                </span>
+                <button
+                  onClick={onRequestChanges}
+                  disabled={isLoading}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-yellow-700 border border-yellow-300 rounded-md hover:bg-yellow-100 disabled:opacity-50"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  Request Changes
+                </button>
+                <button
+                  onClick={onReject}
+                  disabled={isLoading}
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-700 border border-red-300 rounded-md hover:bg-red-100 disabled:opacity-50"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Reject
+                </button>
+                <button
+                  disabled
+                  className="flex items-center gap-1 px-3 py-1.5 text-sm bg-gray-300 text-gray-500 rounded-md cursor-not-allowed"
+                  title="Resolve blocking violations before approving"
+                >
+                  <CheckCircle className="h-4 w-4" />
+                  Approve
                 </button>
               </div>
             )}

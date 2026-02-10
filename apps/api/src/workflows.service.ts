@@ -231,11 +231,120 @@ export class WorkflowsService {
         pullRequests: { orderBy: { createdAt: 'desc' } },
         runs: { orderBy: { startedAt: 'desc' } },
         policyViolations: { orderBy: { createdAt: 'asc' } },
-        stageDecisions: { orderBy: { createdAt: 'asc' } }
+        stageDecisions: { orderBy: { createdAt: 'asc' } },
+        tasks: { orderBy: { taskId: 'asc' } }
       }
     });
 
     return workflow ?? null;
+  }
+
+  async getTasks(workflowId: string) {
+    const tasks = await this.prisma.workflowTask.findMany({
+      where: { workflowId },
+      orderBy: { taskId: 'asc' }
+    });
+
+    return tasks;
+  }
+
+  async getCostSummary(workflowId: string) {
+    const runs = await this.prisma.workflowRun.findMany({
+      where: { workflowId },
+      select: {
+        jobName: true,
+        agentRole: true,
+        inputTokens: true,
+        outputTokens: true,
+        totalTokens: true,
+        estimatedCost: true,
+        durationMs: true,
+        startedAt: true,
+        status: true
+      },
+      orderBy: { startedAt: 'asc' }
+    });
+
+    // Aggregate by job/role
+    const byJob: Record<string, { inputTokens: number; outputTokens: number; totalTokens: number; estimatedCost: number; count: number; durationMs: number }> = {};
+    const byRole: Record<string, { inputTokens: number; outputTokens: number; totalTokens: number; estimatedCost: number; count: number; durationMs: number }> = {};
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalTokens = 0;
+    let totalCost = 0;
+    let totalDuration = 0;
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const run of runs) {
+      const input = run.inputTokens || 0;
+      const output = run.outputTokens || 0;
+      const tokens = run.totalTokens || 0;
+      const cost = run.estimatedCost || 0;
+      const duration = run.durationMs || 0;
+
+      totalInputTokens += input;
+      totalOutputTokens += output;
+      totalTokens += tokens;
+      totalCost += cost;
+      totalDuration += duration;
+
+      if (run.status === 'completed') successCount++;
+      if (run.status === 'failed') failedCount++;
+
+      // By job
+      const job = run.jobName || 'unknown';
+      if (!byJob[job]) {
+        byJob[job] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, count: 0, durationMs: 0 };
+      }
+      byJob[job].inputTokens += input;
+      byJob[job].outputTokens += output;
+      byJob[job].totalTokens += tokens;
+      byJob[job].estimatedCost += cost;
+      byJob[job].count++;
+      byJob[job].durationMs += duration;
+
+      // By role
+      const role = run.agentRole || 'system';
+      if (!byRole[role]) {
+        byRole[role] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCost: 0, count: 0, durationMs: 0 };
+      }
+      byRole[role].inputTokens += input;
+      byRole[role].outputTokens += output;
+      byRole[role].totalTokens += tokens;
+      byRole[role].estimatedCost += cost;
+      byRole[role].count++;
+      byRole[role].durationMs += duration;
+    }
+
+    return {
+      totals: {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        totalTokens,
+        estimatedCost: totalCost, // in cents
+        estimatedCostUsd: (totalCost / 100).toFixed(4),
+        totalDurationMs: totalDuration,
+        runCount: runs.length,
+        successCount,
+        failedCount
+      },
+      byJob: Object.entries(byJob).map(([name, data]) => ({
+        name,
+        ...data,
+        estimatedCostUsd: (data.estimatedCost / 100).toFixed(4)
+      })),
+      byRole: Object.entries(byRole).map(([name, data]) => ({
+        name,
+        ...data,
+        estimatedCostUsd: (data.estimatedCost / 100).toFixed(4)
+      })),
+      runs: runs.map(r => ({
+        ...r,
+        estimatedCostUsd: r.estimatedCost ? (r.estimatedCost / 100).toFixed(4) : '0.0000'
+      }))
+    };
   }
 
   async approve(workflowId: string, patchSetId?: string, approvedBy: string = 'me') {
@@ -424,11 +533,12 @@ export class WorkflowsService {
   // Stage Actions (Gated Pipeline)
   // ============================================================================
 
-  private readonly VALID_STAGES = ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'];
+  private readonly VALID_STAGES = ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'pr'];
   private readonly NEXT_STAGE: Record<string, string> = {
     'feasibility': 'architecture',
     'architecture': 'timeline',
-    'timeline': 'patches',
+    'timeline': 'summary',
+    'summary': 'patches',
     'patches': 'policy',
     'policy': 'pr',
     'pr': 'done'
@@ -459,6 +569,16 @@ export class WorkflowsService {
 
     if (workflow.stageStatus !== 'ready') {
       return { ok: false, error: 'STAGE_NOT_READY', workflowId, stage, newStatus: workflow.stageStatus };
+    }
+
+    // For policy stage, verify no blocking violations exist
+    if (stage === 'policy') {
+      const blockingViolation = await this.prisma.policyViolation.findFirst({
+        where: { workflowId, severity: 'BLOCK' }
+      });
+      if (blockingViolation) {
+        return { ok: false, error: 'BLOCKING_VIOLATIONS_EXIST', workflowId, stage, newStatus: workflow.stageStatus };
+      }
     }
 
     // Create decision record

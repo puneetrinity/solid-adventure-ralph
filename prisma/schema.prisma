@@ -46,6 +46,7 @@ model Workflow {
   policyViolations PolicyViolation[]
   checkpoints      Checkpoint[]
   stageDecisions   StageDecision[]
+  tasks            WorkflowTask[]
 
   @@index([stage, stageStatus])
 }
@@ -111,7 +112,7 @@ model WorkflowEvent {
 model Artifact {
   id         String   @id @default(uuid())
   workflowId String
-  kind       String   // FeasibilityV1 | ArchitectureV1 | TimelineV1 | PolicyV1 | DecisionV1
+  kind       String   // FeasibilityV1 | ArchitectureV1 | TimelineV1 | SummaryV1 | PolicyV1 | DecisionV1
   path       String?
   content    String
   contentSha String
@@ -130,7 +131,7 @@ model Artifact {
 model StageDecision {
   id         String   @id @default(uuid())
   workflowId String
-  stage      String   // feasibility | architecture | timeline | patches | policy | pr
+  stage      String   // feasibility | architecture | timeline | summary | patches | policy | pr
   decision   String   // approve | reject | request_changes
   reason     String?  // User-provided feedback or rationale
   actorId    String?  // User ID who made the decision
@@ -316,4 +317,44 @@ model Checkpoint {
 
   @@index([workflowId, createdAt])
   @@index([workflowId, stageIndex])
+}
+
+model WorkflowTask {
+  id           String   @id @default(uuid())
+  workflowId   String
+  taskId       String   // LLM-generated task ID (e.g., T001)
+  title        String
+  description  String
+  type         String   @default("feature") // feature | bugfix | refactor | test | docs | config
+  priority     String   @default("medium")  // critical | high | medium | low
+  complexity   String   @default("medium")  // trivial | small | medium | large
+  status       String   @default("pending") // pending | in_progress | completed | blocked
+
+  // Dependencies and relationships
+  dependencies Json     @default("[]")      // Array of taskId strings this task depends on
+  files        Json     @default("[]")      // Array of file paths this task touches
+
+  // Acceptance criteria
+  acceptanceCriteria Json @default("[]")    // Array of strings
+
+  // Estimation
+  estimatedHours Float?
+  actualHours    Float?
+
+  // Multi-repo support
+  repoOwner    String?
+  repoName     String?
+
+  // Tracking
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workflow     Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, taskId])
+  @@index([workflowId, status])
+  @@index([workflowId, priority])
+  @@index([repoOwner, repoName])
 }

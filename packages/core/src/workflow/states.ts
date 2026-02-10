@@ -12,10 +12,10 @@ export type WorkflowState =
   | 'REJECTED'; // User explicitly rejected via stage rejection
 
 // Legacy stage names for job processors
-export type StageName = 'ingest_context' | 'apply_patches' | 'evaluate_policy' | 'feasibility' | 'architecture' | 'timeline';
+export type StageName = 'ingest_context' | 'apply_patches' | 'evaluate_policy' | 'feasibility' | 'architecture' | 'timeline' | 'summary';
 
 // Gated pipeline stage names
-export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'patches' | 'policy' | 'pr' | 'done';
+export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'summary' | 'patches' | 'policy' | 'pr' | 'done';
 
 // Stage status for gated pipeline
 export type StageStatus = 'pending' | 'processing' | 'ready' | 'approved' | 'rejected' | 'blocked' | 'needs_changes';
@@ -59,4 +59,5 @@ export type EnqueueJob =
   // Gated pipeline jobs
   | { queue: 'workflow'; name: 'feasibility_analysis'; payload: { workflowId: string } }
   | { queue: 'workflow'; name: 'architecture_analysis'; payload: { workflowId: string } }
-  | { queue: 'workflow'; name: 'timeline_analysis'; payload: { workflowId: string } };
+  | { queue: 'workflow'; name: 'timeline_analysis'; payload: { workflowId: string } }
+  | { queue: 'workflow'; name: 'summary_analysis'; payload: { workflowId: string } };
