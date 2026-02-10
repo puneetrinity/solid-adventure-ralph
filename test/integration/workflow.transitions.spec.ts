@@ -57,6 +57,7 @@ run('workflow stage transitions (feasibility → architecture → timeline)', as
   expect(createRes.ok).toBe(true);
   const created = await createRes.json() as { id?: string; workflow?: { id: string } };
   const workflowId = created.id || created.workflow?.id;
+  if (!workflowId) throw new Error('No workflow ID returned');
   expect(workflowId).toBeTruthy();
 
   await waitForStage(workflowId, 'feasibility', 'ready');
