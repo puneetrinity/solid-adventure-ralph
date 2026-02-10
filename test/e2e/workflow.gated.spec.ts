@@ -48,5 +48,5 @@ test('create feature request from repos page', async ({ page }) => {
   await page.getByRole('button', { name: /create request/i }).click();
 
   await expect(page).toHaveURL(/\/workflows\//, { timeout: 15000 });
-  await expect(page.getByText(/feasibility/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /feasibility/i }).first()).toBeVisible();
 });

@@ -132,6 +132,7 @@ jobs:
           REDIS_URL: redis://localhost:6379
           GITHUB_TOKEN: ''
           ALLOW_SUMMARY_FALLBACK: 'true'
+          ALLOW_PATCH_FALLBACK: 'true'
         run: |
           npm --workspace apps/api run start &
           for i in {1..30}; do
@@ -147,6 +148,7 @@ jobs:
           REDIS_URL: redis://localhost:6379
           GITHUB_TOKEN: ''
           ALLOW_SUMMARY_FALLBACK: 'true'
+          ALLOW_PATCH_FALLBACK: 'true'
         run: npm --workspace apps/worker run start &
 
       - name: Run Integration Tests

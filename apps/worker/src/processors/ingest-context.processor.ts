@@ -581,9 +581,27 @@ export class IngestContextProcessor extends WorkerHost {
         this.logger.warn(`LLM call failed for ${repoOwner}/${repoName}: ${response.error}`);
       }
 
-    // Block progression if LLM didn't produce a usable diff
+    // Block progression if LLM didn't produce a usable diff (unless fallback is allowed)
     if (!patchDiff) {
-      throw new Error(`No valid patch diff generated for ${repoOwner}/${repoName}`);
+      const allowFallback = process.env.ALLOW_PATCH_FALLBACK === 'true';
+      if (allowFallback) {
+        const stubPath = 'docs/ARCH_ORCHESTRATOR_STUB.md';
+        const stubContent = [
+          '# Stub Patch',
+          '',
+          `Generated because patch output was invalid for ${repoOwner}/${repoName}.`,
+          `Workflow: ${workflowId}`,
+        ].join('\n');
+        const newLines = stubContent.split('\n');
+        patchTitle = `Stub patch for ${repoOwner}/${repoName}`;
+        patchSummary = 'Fallback patch generated in test mode.';
+        patchDiff = this.generateDiff(stubPath, [], newLines, 'create');
+        files = [{ path: stubPath, additions: newLines.length, deletions: 0 }];
+        addsTests = false;
+        this.logger.warn(`Using fallback stub patch for ${repoOwner}/${repoName}`);
+      } else {
+        throw new Error(`No valid patch diff generated for ${repoOwner}/${repoName}`);
+      }
     }
 
     return { patchTitle, patchSummary, patchDiff, files, addsTests };
