@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import {
   RunRecorder,
   LLMRunner,
-  createGroqProvider,
+  createProviderWithFallback,
   FeasibilityAnalysisSchema,
   safeParseLLMResponse,
   SCHEMA_DESCRIPTIONS,
@@ -96,11 +96,11 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
       }
 
       // Generate feasibility analysis using LLM
-      const groqProvider = createGroqProvider();
+      const llmProvider = createProviderWithFallback('feasibility');
       let artifact: FeasibilityArtifact;
 
-      if (groqProvider) {
-        const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+      this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for feasibility analysis`);
+      const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
         const promptParts = [
           `You are a senior software architect evaluating a feature request. Analyze the feasibility of this feature.`,
@@ -212,24 +212,6 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
         } else {
           throw new Error(`LLM call failed: ${response.error}`);
         }
-      } else {
-        // Stub artifact when no LLM configured
-        this.logger.warn('GROQ_API_KEY not set, using stub feasibility analysis');
-        artifact = {
-          kind: 'FeasibilityV1',
-          recommendation: 'proceed',
-          reasoning: 'Stub analysis - GROQ_API_KEY not configured',
-          risks: ['LLM not configured for proper analysis'],
-          alternatives: [],
-          unknowns: ['Full analysis requires LLM configuration'],
-          assumptions: [],
-          repoSummaries,
-          inputs: {
-            featureGoal: workflow.featureGoal || workflow.goal || '',
-            businessJustification: workflow.businessJustification || ''
-          }
-        };
-      }
 
       // Save artifact
       const artifactContent = JSON.stringify(artifact, null, 2);

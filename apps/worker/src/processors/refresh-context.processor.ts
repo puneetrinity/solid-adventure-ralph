@@ -5,7 +5,7 @@ import { getPrisma } from '@arch-orchestrator/db';
 import {
   type GitHubClient,
   LLMRunner,
-  createGroqProvider,
+  createProviderWithFallback,
 } from '@arch-orchestrator/core';
 import { GITHUB_CLIENT_TOKEN } from '../constants';
 
@@ -73,13 +73,12 @@ export class RefreshContextProcessor extends WorkerHost {
 
       // Generate summary using LLM, or generate full context if none exists
       let summary: string | null = null;
-      const groqProvider = createGroqProvider();
+      const llmProvider = createProviderWithFallback('context');
 
       if (content) {
         // Context file exists - generate summary
-        if (groqProvider) {
-          this.logger.log(`Generating summary for ${repoOwner}/${repoName} context...`);
-          const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+        this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) to summarize context for ${repoOwner}/${repoName}...`);
+        const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
           const prompt = `You are a technical documentation expert. Summarize the following project context document in 2-3 paragraphs. Focus on:
 1. What the project does (purpose and main features)
@@ -104,10 +103,9 @@ ${content}`;
           } catch (err) {
             this.logger.warn(`LLM summarization failed: ${err}`);
           }
-        }
-      } else if (groqProvider) {
+      } else {
         // No context file - generate one by analyzing repo structure
-        this.logger.log(`No context file found for ${repoOwner}/${repoName}, generating from repo analysis...`);
+        this.logger.log(`No context file found for ${repoOwner}/${repoName}, generating from repo analysis using ${llmProvider.name}...`);
 
         try {
           // Fetch repo info and file tree
@@ -146,7 +144,7 @@ ${content}`;
             .slice(0, 200)
             .join('\n');
 
-          const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+          const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
           const generatePrompt = `You are a technical documentation expert. Analyze this repository and generate a PROJECT_CONTEXT.md document.
 

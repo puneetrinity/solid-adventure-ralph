@@ -26,6 +26,23 @@ type SandboxResult = {
   createdAt: string;
   durationMs?: number;
   commitShas?: string[];
+  failedJobs?: FailedJobSummary[];
+  failedSteps?: FailedStepSummary[];
+  errorSummary?: string;
+};
+
+type FailedStepSummary = {
+  jobName: string;
+  stepName: string;
+  conclusion: string;
+};
+
+type FailedJobSummary = {
+  id: number;
+  name: string;
+  conclusion: string;
+  url?: string;
+  failedSteps?: FailedStepSummary[];
 };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -161,6 +178,14 @@ export class SandboxValidationProcessor extends WorkerHost {
         ? new Date(run.updatedAt).getTime() - new Date(run.createdAt).getTime()
         : undefined;
 
+      const failureDetails = run.id
+        ? await this.collectJobFailures({
+            owner: repoOwner,
+            repo: repoName,
+            runId: run.id
+          })
+        : null;
+
       const artifact: SandboxResult = {
         kind: 'SandboxResultV1',
         status,
@@ -174,7 +199,10 @@ export class SandboxValidationProcessor extends WorkerHost {
         workflowId,
         createdAt: new Date().toISOString(),
         durationMs,
-        commitShas: applyResult.commitShas
+        commitShas: applyResult.commitShas,
+        failedJobs: failureDetails?.failedJobs,
+        failedSteps: failureDetails?.failedSteps,
+        errorSummary: failureDetails?.errorSummary
       };
 
       const artifactContent = JSON.stringify(artifact, null, 2);
@@ -196,6 +224,22 @@ export class SandboxValidationProcessor extends WorkerHost {
           supersedesArtifactId: existingArtifact?.id || null
         }
       });
+
+      if (status === 'fail') {
+        await this.appendSandboxFeedbackToDecision({
+          workflowId,
+          patchSetId,
+          repoOwner,
+          repoName,
+          branch: branchName,
+          conclusion,
+          runUrl: run.htmlUrl,
+          logsUrl: run.logsUrl,
+          errorSummary: failureDetails?.errorSummary,
+          failedJobs: failureDetails?.failedJobs,
+          failedSteps: failureDetails?.failedSteps
+        });
+      }
 
       await this.prisma.workflowEvent.create({
         data: {
@@ -334,5 +378,151 @@ export class SandboxValidationProcessor extends WorkerHost {
     }
 
     throw new Error('Sandbox validation timed out');
+  }
+
+  private async collectJobFailures(params: { owner: string; repo: string; runId: number }) {
+    try {
+      const jobsList = await this.github.getWorkflowRunJobs({
+        owner: params.owner,
+        repo: params.repo,
+        runId: params.runId,
+        perPage: 50
+      });
+
+      const failedSteps: FailedStepSummary[] = [];
+      const failedJobs: FailedJobSummary[] = [];
+
+      for (const job of jobsList.jobs) {
+        if (job.conclusion && job.conclusion !== 'success') {
+          const jobFailedSteps: FailedStepSummary[] = [];
+
+          for (const step of job.steps ?? []) {
+            if (step.conclusion && step.conclusion !== 'success') {
+              const stepSummary: FailedStepSummary = {
+                jobName: job.name,
+                stepName: step.name,
+                conclusion: step.conclusion
+              };
+              failedSteps.push(stepSummary);
+              jobFailedSteps.push(stepSummary);
+            }
+          }
+
+          failedJobs.push({
+            id: job.id,
+            name: job.name,
+            conclusion: job.conclusion,
+            url: job.htmlUrl,
+            failedSteps: jobFailedSteps.length > 0 ? jobFailedSteps : undefined
+          });
+        }
+      }
+
+      const summaryLines = failedSteps.length > 0
+        ? failedSteps.slice(0, 5).map(step => `${step.jobName} › ${step.stepName}: ${step.conclusion}`)
+        : failedJobs.slice(0, 5).map(job => `${job.name}: ${job.conclusion}`);
+
+      const overflow = failedSteps.length > 5
+        ? failedSteps.length - 5
+        : failedJobs.length > 5
+          ? failedJobs.length - 5
+          : 0;
+
+      const errorSummary = summaryLines.length > 0
+        ? `${summaryLines.join(' | ')}${overflow > 0 ? ` (+${overflow} more)` : ''}`
+        : undefined;
+
+      return {
+        failedJobs: failedJobs.length > 0 ? failedJobs : undefined,
+        failedSteps: failedSteps.length > 0 ? failedSteps : undefined,
+        errorSummary
+      };
+    } catch (error: any) {
+      this.logger.warn(`Failed to load workflow job details: ${error?.message ?? error}`);
+      return null;
+    }
+  }
+
+  private async appendSandboxFeedbackToDecision(params: {
+    workflowId: string;
+    patchSetId: string;
+    repoOwner: string;
+    repoName: string;
+    branch: string;
+    conclusion: string;
+    runUrl?: string;
+    logsUrl?: string;
+    errorSummary?: string;
+    failedJobs?: FailedJobSummary[];
+    failedSteps?: FailedStepSummary[];
+  }) {
+    const existingDecision = await this.prisma.artifact.findFirst({
+      where: { workflowId: params.workflowId, kind: 'DecisionV1' },
+      orderBy: { artifactVersion: 'desc' }
+    });
+
+    if (!existingDecision) {
+      return;
+    }
+
+    const marker = `PatchSet: ${params.patchSetId}`;
+    if (existingDecision.content.includes('Sandbox CI Feedback') && existingDecision.content.includes(marker)) {
+      return;
+    }
+
+    const lines: string[] = [
+      '## Sandbox CI Feedback',
+      `- Repository: ${params.repoOwner}/${params.repoName}`,
+      `- Branch: ${params.branch}`,
+      `- PatchSet: ${params.patchSetId}`,
+      `- Conclusion: ${params.conclusion}`
+    ];
+
+    if (params.runUrl) {
+      lines.push(`- Run: ${params.runUrl}`);
+    }
+
+    if (params.logsUrl) {
+      lines.push(`- Logs: ${params.logsUrl}`);
+    }
+
+    if (params.errorSummary) {
+      lines.push(`- Summary: ${params.errorSummary}`);
+    }
+
+    if (params.failedSteps && params.failedSteps.length > 0) {
+      lines.push('', '### Failed Steps');
+      for (const step of params.failedSteps.slice(0, 10)) {
+        lines.push(`- ${step.jobName} › ${step.stepName}: ${step.conclusion}`);
+      }
+      if (params.failedSteps.length > 10) {
+        lines.push(`- ...and ${params.failedSteps.length - 10} more`);
+      }
+    } else if (params.failedJobs && params.failedJobs.length > 0) {
+      lines.push('', '### Failed Jobs');
+      for (const job of params.failedJobs.slice(0, 10)) {
+        lines.push(`- ${job.name}: ${job.conclusion}`);
+      }
+      if (params.failedJobs.length > 10) {
+        lines.push(`- ...and ${params.failedJobs.length - 10} more`);
+      }
+    }
+
+    lines.push('', `- Generated: ${new Date().toISOString()}`);
+
+    const newContent = `${existingDecision.content.trim()}\n\n${lines.join('\n')}\n`;
+    const newSha = createHash('sha256').update(newContent, 'utf8').digest('hex');
+
+    await this.prisma.artifact.create({
+      data: {
+        workflowId: params.workflowId,
+        kind: 'DecisionV1',
+        path: existingDecision.path || '.ai/DECISION.md',
+        content: newContent,
+        contentSha: newSha,
+        artifactVersion: existingDecision.artifactVersion + 1,
+        supersedesArtifactId: existingDecision.id
+      }
+    });
   }
 }

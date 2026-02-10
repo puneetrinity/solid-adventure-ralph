@@ -138,6 +138,39 @@ export type GetWorkflowRunParams = {
   runId: number;
 };
 
+export type GetWorkflowRunJobsParams = {
+  owner: string;
+  repo: string;
+  runId: number;
+  perPage?: number;
+  page?: number;
+};
+
+export type WorkflowRunJobStep = {
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed';
+  conclusion?: 'success' | 'failure' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | null;
+  number?: number;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+export type WorkflowRunJob = {
+  id: number;
+  name: string;
+  status: 'queued' | 'in_progress' | 'completed';
+  conclusion?: 'success' | 'failure' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | null;
+  htmlUrl?: string;
+  startedAt?: string;
+  completedAt?: string;
+  steps?: WorkflowRunJobStep[];
+};
+
+export type WorkflowRunJobsList = {
+  totalCount: number;
+  jobs: WorkflowRunJob[];
+};
+
 // ============================================================================
 // Types for Branch/Commit Operations
 // ============================================================================
@@ -216,6 +249,7 @@ export interface GitHubClient {
   dispatchWorkflow(params: DispatchWorkflowParams): Promise<void>;
   listWorkflowRuns(params: ListWorkflowRunsParams): Promise<WorkflowRunList>;
   getWorkflowRun(params: GetWorkflowRunParams): Promise<WorkflowRunInfo>;
+  getWorkflowRunJobs(params: GetWorkflowRunJobsParams): Promise<WorkflowRunJobsList>;
 
   // Write operations (require approval via WriteGate)
   createBranch(params: CreateBranchParams): Promise<CreateBranchResult>;
@@ -328,6 +362,35 @@ export class StubGitHubClient implements GitHubClient {
       event: 'workflow_dispatch',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
+    };
+  }
+
+  async getWorkflowRunJobs(_params: GetWorkflowRunJobsParams): Promise<WorkflowRunJobsList> {
+    return {
+      totalCount: 1,
+      jobs: [
+        {
+          id: 1001,
+          name: 'test',
+          status: 'completed',
+          conclusion: 'success',
+          htmlUrl: 'https://github.com/example/repo/actions/runs/1/job/1001',
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          steps: [
+            {
+              name: 'checkout',
+              status: 'completed',
+              conclusion: 'success'
+            },
+            {
+              name: 'tests',
+              status: 'completed',
+              conclusion: 'success'
+            }
+          ]
+        }
+      ]
     };
   }
 

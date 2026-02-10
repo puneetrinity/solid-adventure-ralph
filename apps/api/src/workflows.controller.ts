@@ -207,6 +207,22 @@ export class WorkflowsController {
     return this.workflows.retryStage(id, stage, req.user.id, req.user.username);
   }
 
+  @Post(':id/actions/regenerate_patches')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Regenerate patches using CI feedback', description: 'Move from sandbox back to patches and re-run patch generation with CI feedback' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiResponse({ status: 200, description: 'Patch regeneration initiated', type: StageDecisionResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async regeneratePatches(
+    @Param('id') id: string,
+    @Body() body: StageActionDto,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.workflows.regeneratePatchesFromSandbox(id, body?.reason, req.user.id, req.user.username);
+  }
+
   @Delete(':id')
   @UseGuards(AuthGuard)
   @ApiCookieAuth()

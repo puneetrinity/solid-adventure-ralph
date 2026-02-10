@@ -7,3 +7,6 @@ export * from './artifact-generator';
 export * from './patch-generator';
 export * from './cost-tracker';
 export * from './groq-provider';
+export * from './openai-provider';
+export * from './anthropic-provider';
+export * from './provider-factory';

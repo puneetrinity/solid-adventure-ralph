@@ -192,6 +192,12 @@ export const api = {
         { method: 'POST' }
       ),
 
+    regeneratePatches: (id: string, reason?: string) =>
+      fetchJson<{ ok: boolean; workflowId: string; stage: string; newStatus: string; decisionId?: string; error?: string }>(
+        `/api/workflows/${id}/actions/regenerate_patches`,
+        { method: 'POST', body: JSON.stringify({ reason }) }
+      ),
+
     getPatchSets: (id: string) =>
       fetchJson<PatchSet[]>(`/api/workflows/${id}/patch_sets`),
 

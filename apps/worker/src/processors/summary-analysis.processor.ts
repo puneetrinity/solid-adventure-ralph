@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import {
   RunRecorder,
   LLMRunner,
-  createGroqProvider,
+  createProviderWithFallback,
   SummaryAnalysisSchema,
   safeParseLLMResponse,
   buildRetryPrompt,
@@ -126,11 +126,11 @@ export class SummaryAnalysisProcessor extends WorkerHost {
         timelineArtifact?.path
       ].filter(Boolean) as string[];
 
-      const groqProvider = createGroqProvider();
+      const llmProvider = createProviderWithFallback('summary');
       let artifact: SummaryArtifact;
 
-      if (groqProvider) {
-        const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+      this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for summary analysis`);
+      const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
         const promptParts = [
           `You are preparing a final pre-patch summary for a gated workflow.`,
@@ -224,28 +224,6 @@ export class SummaryAnalysisProcessor extends WorkerHost {
             timelineSummary: timelineData.summary || ''
           }
         };
-      } else {
-        this.logger.warn('GROQ_API_KEY not set, using stub summary analysis');
-        artifact = {
-          kind: 'SummaryV1',
-          overview: 'Stub summary - GROQ_API_KEY not configured',
-          scope: [],
-          risks: [],
-          tests: [],
-          dependencies: [],
-          pros: [],
-          cons: [],
-          links: artifactLinks,
-          recommendation: 'hold',
-          inputs: {
-            featureGoal: workflow.featureGoal || workflow.goal || '',
-            businessJustification: workflow.businessJustification || '',
-            feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
-            architectureOverview: architectureData.overview || '',
-            timelineSummary: timelineData.summary || ''
-          }
-        };
-      }
 
       const artifactContent = JSON.stringify(artifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');

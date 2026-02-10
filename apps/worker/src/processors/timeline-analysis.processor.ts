@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import {
   RunRecorder,
   LLMRunner,
-  createGroqProvider,
+  createProviderWithFallback,
   TimelineAnalysisSchema,
   safeParseLLMResponse,
   SCHEMA_DESCRIPTIONS,
@@ -114,11 +114,11 @@ export class TimelineAnalysisProcessor extends WorkerHost {
         }
       }
 
-      const groqProvider = createGroqProvider();
+      const llmProvider = createProviderWithFallback('timeline');
       let artifact: TimelineArtifact;
 
-      if (groqProvider) {
-        const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+      this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for timeline analysis`);
+      const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
         const promptParts = [
           `You are a senior software architect creating an implementation timeline for a feature.`,
@@ -216,20 +216,6 @@ export class TimelineAnalysisProcessor extends WorkerHost {
         } else {
           throw new Error(`LLM call failed: ${response.error}`);
         }
-      } else {
-        this.logger.warn('GROQ_API_KEY not set, using stub timeline analysis');
-        artifact = {
-          kind: 'TimelineV1',
-          summary: 'Stub analysis - GROQ_API_KEY not configured',
-          phases: [],
-          criticalPath: [],
-          parallelizable: [],
-          inputs: {
-            featureGoal: workflow.featureGoal || workflow.goal || '',
-            architectureOverview: architectureData.overview || ''
-          }
-        };
-      }
 
       const artifactContent = JSON.stringify(artifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');

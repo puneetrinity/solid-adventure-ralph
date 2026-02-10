@@ -8,7 +8,7 @@ import {
   RunRecorder,
   type GitHubClient,
   LLMRunner,
-  createGroqProvider,
+  createProviderWithFallback,
   PatchGenerationSchema,
   safeParseLLMResponse,
   SCHEMA_DESCRIPTIONS,
@@ -127,7 +127,7 @@ export class IngestContextProcessor extends WorkerHost {
     });
 
     const patchSetIds: string[] = [];
-    const groqProvider = createGroqProvider();
+    const llmProvider = createProviderWithFallback('patches');
 
     try {
       // Process each repo
@@ -150,7 +150,7 @@ export class IngestContextProcessor extends WorkerHost {
           workflow,
           repoConfig,
           context,
-          groqProvider
+          llmProvider
         );
 
         // Create PatchSet for this repo (with context audit trail)
@@ -385,7 +385,7 @@ export class IngestContextProcessor extends WorkerHost {
     workflow: { goal: string | null; context: string | null; feedback: string | null },
     repoConfig: RepoConfig,
     repoContext: RepoContext,
-    groqProvider: ReturnType<typeof createGroqProvider>
+    llmProvider: ReturnType<typeof createProviderWithFallback>
   ): Promise<PatchResult> {
     const { owner: repoOwner, repo: repoName, baseBranch } = repoConfig;
     const { readmeContent, packageJson, tree, storedContextSummary, storedContextPath, baseSha } = repoContext;
@@ -396,9 +396,8 @@ export class IngestContextProcessor extends WorkerHost {
     let files: Array<{ path: string; additions: number; deletions: number }> = [];
     let addsTests = false;
 
-    if (groqProvider) {
-      this.logger.log(`Using Groq LLM to generate multi-file patch for ${repoOwner}/${repoName}...`);
-      const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+    this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) to generate patch for ${repoOwner}/${repoName}...`);
+    const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
       const promptParts = [
         `You are an expert software engineer. Your task is to implement the following request by modifying or creating files in the repository.`,
@@ -575,9 +574,6 @@ export class IngestContextProcessor extends WorkerHost {
       } else {
         this.logger.warn(`LLM call failed for ${repoOwner}/${repoName}: ${response.error}`);
       }
-    } else {
-      this.logger.warn('GROQ_API_KEY not set, cannot generate patches');
-    }
 
     // Block progression if LLM didn't produce a usable diff
     if (!patchDiff) {

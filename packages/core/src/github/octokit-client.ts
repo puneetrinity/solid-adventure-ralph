@@ -23,6 +23,10 @@ import type {
   WorkflowRunList,
   GetWorkflowRunParams,
   WorkflowRunInfo,
+  GetWorkflowRunJobsParams,
+  WorkflowRunJobsList,
+  WorkflowRunJob,
+  WorkflowRunJobStep,
   CreateBranchParams,
   CreateBranchResult,
   UpdateFileParams,
@@ -234,6 +238,41 @@ export class OctokitGitHubClient implements GitHubClient {
       event: data.event,
       createdAt: data.created_at,
       updatedAt: data.updated_at
+    };
+  }
+
+  async getWorkflowRunJobs(params: GetWorkflowRunJobsParams): Promise<WorkflowRunJobsList> {
+    const { data } = await this.octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs', {
+      owner: params.owner,
+      repo: params.repo,
+      run_id: params.runId,
+      per_page: params.perPage ?? 50,
+      page: params.page ?? 1
+    });
+
+    const jobs = (data as any).jobs.map((job: any): WorkflowRunJob => ({
+      id: job.id,
+      name: job.name,
+      status: job.status as WorkflowRunJob['status'],
+      conclusion: job.conclusion as WorkflowRunJob['conclusion'],
+      htmlUrl: job.html_url,
+      startedAt: job.started_at,
+      completedAt: job.completed_at,
+      steps: Array.isArray(job.steps)
+        ? job.steps.map((step: any): WorkflowRunJobStep => ({
+            name: step.name,
+            status: step.status as WorkflowRunJobStep['status'],
+            conclusion: step.conclusion as WorkflowRunJobStep['conclusion'],
+            number: step.number,
+            startedAt: step.started_at,
+            completedAt: step.completed_at
+          }))
+        : undefined
+    }));
+
+    return {
+      totalCount: (data as any).total_count ?? jobs.length,
+      jobs
     };
   }
 

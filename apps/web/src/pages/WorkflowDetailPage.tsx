@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   RefreshCw,
+  RotateCcw,
   ExternalLink,
   AlertCircle,
   Clock,
@@ -32,7 +33,6 @@ import {
   Rocket,
   History,
   Play,
-  Pause,
   AlertTriangle,
   ThumbsUp,
   ThumbsDown,
@@ -93,6 +93,8 @@ export function WorkflowDetailPage() {
   const [showStageChangesModal, setShowStageChangesModal] = useState(false);
   const [stageRejectReason, setStageRejectReason] = useState('');
   const [stageChangesReason, setStageChangesReason] = useState('');
+  const [showSandboxRegenerateModal, setShowSandboxRegenerateModal] = useState(false);
+  const [sandboxRegenerateReason, setSandboxRegenerateReason] = useState('');
 
   const canCancel = workflow && ['INGESTED', 'PATCHES_PROPOSED', 'WAITING_USER_APPROVAL', 'APPLYING_PATCHES', 'PR_OPEN', 'VERIFYING_CI'].includes(workflow.state);
 
@@ -230,6 +232,24 @@ export function WorkflowDetailPage() {
     }
   };
 
+  const handleSandboxRegenerate = async () => {
+    if (!workflow) return;
+    setStageActionLoading(true);
+    try {
+      await api.workflows.regeneratePatches(
+        workflow.id,
+        sandboxRegenerateReason.trim() || undefined
+      );
+      setShowSandboxRegenerateModal(false);
+      setSandboxRegenerateReason('');
+      await refetch();
+    } catch (err) {
+      console.error('Failed to regenerate patches:', err);
+    } finally {
+      setStageActionLoading(false);
+    }
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
@@ -279,6 +299,17 @@ export function WorkflowDetailPage() {
   }
 
   const latestPR = workflow.pullRequests?.[0];
+  const sandboxArtifact = workflow.artifacts?.find(a => a.kind === 'SandboxResultV1');
+  let sandboxFailed = false;
+  if (sandboxArtifact) {
+    try {
+      const data = JSON.parse(sandboxArtifact.content);
+      const status = data.status || data.conclusion;
+      sandboxFailed = status === 'fail' || status === 'failure';
+    } catch {
+      sandboxFailed = false;
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -485,6 +516,41 @@ export function WorkflowDetailPage() {
         </div>
       </Modal>
 
+      {/* Sandbox Regenerate Patches Modal */}
+      <Modal
+        isOpen={showSandboxRegenerateModal}
+        onClose={() => { setShowSandboxRegenerateModal(false); setSandboxRegenerateReason(''); }}
+        title="Regenerate Patches from CI Feedback"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            This will move the workflow back to the patches stage and re-run patch generation using the sandbox CI failure context.
+          </p>
+          <textarea
+            value={sandboxRegenerateReason}
+            onChange={(e) => setSandboxRegenerateReason(e.target.value)}
+            placeholder="Optional: add a note for the LLM (e.g., focus on fixing test failures)..."
+            className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm min-h-[100px]"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setShowSandboxRegenerateModal(false); setSandboxRegenerateReason(''); }}
+              className="px-4 py-2 text-sm border border-gray-200 rounded-md hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSandboxRegenerate}
+              disabled={stageActionLoading}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {stageActionLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              Regenerate Patches
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Stage Pipeline Progress */}
       {workflow.stage && (
         <StagePipeline
@@ -492,6 +558,22 @@ export function WorkflowDetailPage() {
           stageStatus={workflow.stageStatus || 'pending'}
           stageUpdatedAt={workflow.stageUpdatedAt}
           hasBlockingViolations={workflow.policyViolations?.some(v => v.severity === 'BLOCK') ?? false}
+          sandboxFailed={sandboxFailed}
+          onJumpToSandbox={() => setActiveTab('sandbox')}
+          onStageSelect={(selectedStage) => {
+            const stageToTab: Record<string, typeof activeTab> = {
+              feasibility: 'feasibility',
+              architecture: 'architecture',
+              timeline: 'timeline',
+              summary: 'summary',
+              patches: 'patches',
+              policy: 'policy',
+              sandbox: 'sandbox',
+              pr: 'overview',
+            };
+            const nextTab = stageToTab[selectedStage] || 'overview';
+            setActiveTab(nextTab);
+          }}
           onApprove={handleStageApprove}
           onReject={() => setShowStageRejectModal(true)}
           onRequestChanges={() => setShowStageChangesModal(true)}
@@ -796,7 +878,14 @@ export function WorkflowDetailPage() {
         {activeTab === 'summary' && <SummaryTab workflow={workflow} />}
         {activeTab === 'artifacts' && <ArtifactsTab artifacts={workflow.artifacts || []} />}
         {activeTab === 'policy' && <PolicyTab violations={workflow.policyViolations || []} />}
-        {activeTab === 'sandbox' && <SandboxTab workflow={workflow} />}
+        {activeTab === 'sandbox' && (
+          <SandboxTab
+            workflow={workflow}
+            canRegenerate={workflow.stage === 'sandbox' && workflow.stageStatus === 'blocked'}
+            onRegenerate={() => setShowSandboxRegenerateModal(true)}
+            onRetry={handleStageRetry}
+          />
+        )}
         {activeTab === 'patches' && (
           <PatchSetsTab
             workflowId={workflow.id}
@@ -1488,12 +1577,39 @@ function SummaryTab({ workflow }: { workflow: Workflow }) {
   );
 }
 
-function SandboxTab({ workflow }: { workflow: Workflow }) {
+function SandboxTab({
+  workflow,
+  canRegenerate,
+  onRegenerate,
+  onRetry,
+}: {
+  workflow: Workflow;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
+  onRetry: () => void;
+}) {
   const artifact = workflow.artifacts?.find(a => a.kind === 'SandboxResultV1');
+  const canRetrySandbox = workflow.stage === 'sandbox' && ['ready', 'blocked', 'needs_changes'].includes(workflow.stageStatus || '');
   if (!artifact) {
     return (
       <div className="bg-white rounded-lg border border-gray-200 p-6 text-center">
         <div className="text-gray-500">No sandbox validation results yet.</div>
+        {canRegenerate && (
+          <button
+            onClick={onRegenerate}
+            className="mt-3 text-sm text-indigo-600 hover:underline"
+          >
+            Regenerate Patches with CI Feedback →
+          </button>
+        )}
+        {canRetrySandbox && (
+          <button
+            onClick={onRetry}
+            className="mt-3 block text-sm text-orange-600 hover:underline"
+          >
+            Retry Sandbox →
+          </button>
+        )}
       </div>
     );
   }
@@ -1507,6 +1623,8 @@ function SandboxTab({ workflow }: { workflow: Workflow }) {
 
   const status = data.status || data.conclusion || 'unknown';
   const isPass = status === 'pass' || status === 'success';
+  const failedSteps = Array.isArray(data.failedSteps) ? data.failedSteps : [];
+  const failedJobs = Array.isArray(data.failedJobs) ? data.failedJobs : [];
 
   return (
     <div className="space-y-6">
@@ -1519,6 +1637,13 @@ function SandboxTab({ workflow }: { workflow: Workflow }) {
             {isPass ? 'Passed' : 'Failed'}
           </span>
         </div>
+
+        {!isPass && (data.errorSummary || failedSteps.length > 0 || failedJobs.length > 0) && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="font-medium text-red-800 mb-1">CI Failure Summary</div>
+            <div>{data.errorSummary || 'Sandbox checks failed. Review the failed jobs below.'}</div>
+          </div>
+        )}
 
         <div className="grid md:grid-cols-2 gap-4 text-sm">
           <div>
@@ -1551,6 +1676,40 @@ function SandboxTab({ workflow }: { workflow: Workflow }) {
           )}
         </div>
 
+        {!isPass && failedSteps.length > 0 && (
+          <div className="mt-5">
+            <div className="text-xs uppercase text-gray-500 mb-2">Failed Steps</div>
+            <ul className="space-y-2 text-sm">
+              {failedSteps.map((step: any, idx: number) => (
+                <li key={`${step.jobName}-${step.stepName}-${idx}`} className="flex items-start gap-2">
+                  <span className="mt-0.5 text-red-500">•</span>
+                  <span className="text-gray-800">
+                    <span className="font-medium">{step.jobName}</span> › {step.stepName}
+                    {step.conclusion ? ` (${step.conclusion})` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {!isPass && failedSteps.length === 0 && failedJobs.length > 0 && (
+          <div className="mt-5">
+            <div className="text-xs uppercase text-gray-500 mb-2">Failed Jobs</div>
+            <ul className="space-y-2 text-sm">
+              {failedJobs.map((job: any) => (
+                <li key={job.id} className="flex items-start gap-2">
+                  <span className="mt-0.5 text-red-500">•</span>
+                  <span className="text-gray-800">
+                    <span className="font-medium">{job.name}</span>
+                    {job.conclusion ? ` (${job.conclusion})` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="mt-4 flex flex-wrap gap-3 text-sm">
           {data.runUrl && (
             <a className="text-blue-600 hover:underline" href={data.runUrl} target="_blank" rel="noreferrer">
@@ -1561,6 +1720,22 @@ function SandboxTab({ workflow }: { workflow: Workflow }) {
             <a className="text-blue-600 hover:underline" href={data.logsUrl} target="_blank" rel="noreferrer">
               View Logs →
             </a>
+          )}
+          {canRegenerate && (
+            <button
+              onClick={onRegenerate}
+              className="text-indigo-600 hover:underline"
+            >
+              Regenerate Patches with CI Feedback →
+            </button>
+          )}
+          {canRetrySandbox && (
+            <button
+              onClick={onRetry}
+              className="text-orange-600 hover:underline"
+            >
+              Retry Sandbox →
+            </button>
           )}
         </div>
       </div>
@@ -2245,7 +2420,7 @@ function ActivityTab({ workflow }: { workflow: Workflow }) {
 
         {/* Timeline items */}
         <div className="space-y-4">
-          {timelineItems.map((item, index) => (
+          {timelineItems.map((item) => (
             <div key={item.id} className="relative flex gap-4 pl-10">
               {/* Dot on timeline */}
               <div className={`absolute left-2.5 w-3 h-3 rounded-full ${getEventColor(item)} ring-2 ring-white`} />
@@ -2355,6 +2530,9 @@ function StagePipeline({
   stageStatus,
   stageUpdatedAt,
   hasBlockingViolations,
+  sandboxFailed,
+  onJumpToSandbox,
+  onStageSelect,
   onApprove,
   onReject,
   onRequestChanges,
@@ -2365,6 +2543,9 @@ function StagePipeline({
   stageStatus: StageStatus;
   stageUpdatedAt?: string;
   hasBlockingViolations: boolean;
+  sandboxFailed: boolean;
+  onJumpToSandbox: () => void;
+  onStageSelect: (stage: GatedStage) => void;
   onApprove: () => void;
   onReject: () => void;
   onRequestChanges: () => void;
@@ -2417,7 +2598,11 @@ function StagePipeline({
 
           return (
             <div key={s.key} className="flex items-center flex-1">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border transition-all ${statusClass}`}>
+              <button
+                type="button"
+                onClick={() => onStageSelect(s.key)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border transition-all ${statusClass} hover:opacity-90`}
+              >
                 {showCheckmark ? (
                   <CheckCircle className="h-4 w-4 text-green-600" />
                 ) : isCurrent && stageStatus === 'processing' ? (
@@ -2428,7 +2613,25 @@ function StagePipeline({
                   <Icon className="h-4 w-4" />
                 )}
                 <span className="hidden sm:inline font-medium">{s.label}</span>
-              </div>
+                {s.key === 'patches' && sandboxFailed && (
+                  <span
+                    className="ml-1 inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 border border-red-200"
+                    title="View CI feedback in Sandbox tab"
+                  >
+                    CI Feedback
+                  </span>
+                )}
+              </button>
+              {s.key === 'patches' && sandboxFailed && (
+                <button
+                  type="button"
+                  onClick={onJumpToSandbox}
+                  className="ml-2 text-[11px] text-red-600 hover:underline"
+                  title="Go to Sandbox tab"
+                >
+                  View →
+                </button>
+              )}
               {idx < STAGES.length - 1 && (
                 <div className={`flex-1 h-0.5 mx-2 transition-colors ${isPast ? 'bg-green-400' : 'bg-gray-200'}`} />
               )}

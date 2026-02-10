@@ -810,4 +810,117 @@ export class WorkflowsService {
 
     return { ok: true, workflowId, stage, newStatus: 'pending' };
   }
+
+  /**
+   * Regenerate patches using CI feedback from the sandbox stage.
+   * Moves workflow back to patches stage and re-runs ingest_context with feedback.
+   */
+  async regeneratePatchesFromSandbox(
+    workflowId: string,
+    reason?: string,
+    actorId?: string,
+    actorName?: string
+  ) {
+    const workflow = await this.prisma.workflow.findUnique({
+      where: { id: workflowId }
+    });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND', workflowId };
+    }
+
+    if (workflow.stage !== 'sandbox') {
+      return { ok: false, error: 'WRONG_STAGE', workflowId, stage: workflow.stage };
+    }
+
+    if (workflow.stageStatus !== 'blocked') {
+      return { ok: false, error: 'STAGE_NOT_BLOCKED', workflowId, stageStatus: workflow.stageStatus };
+    }
+
+    const latestSandbox = await this.prisma.artifact.findFirst({
+      where: { workflowId, kind: 'SandboxResultV1' },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    let ciSummary = 'Sandbox validation failed.';
+    if (latestSandbox?.content) {
+      try {
+        const data = JSON.parse(latestSandbox.content);
+        const parts = [
+          `Sandbox conclusion: ${data.conclusion || data.status || 'unknown'}`,
+          data.errorSummary ? `Summary: ${data.errorSummary}` : null,
+          data.runUrl ? `Run: ${data.runUrl}` : null,
+          data.logsUrl ? `Logs: ${data.logsUrl}` : null,
+          data.branch ? `Branch: ${data.branch}` : null
+        ].filter(Boolean);
+
+        if (Array.isArray(data.failedSteps) && data.failedSteps.length > 0) {
+          const topSteps = data.failedSteps.slice(0, 5)
+            .map((step: any) => `- ${step.jobName} › ${step.stepName}: ${step.conclusion || 'failed'}`);
+          parts.push('Failed steps:\n' + topSteps.join('\n'));
+        }
+
+        ciSummary = parts.join('\n');
+      } catch {
+        // ignore parse errors, keep default summary
+      }
+    }
+
+    const feedbackParts = [
+      'CI Feedback (from sandbox validation):',
+      ciSummary
+    ];
+
+    if (reason) {
+      feedbackParts.push('', 'User note:', reason);
+    }
+
+    const ciFeedback = feedbackParts.join('\n');
+    const combinedFeedback = workflow.feedback
+      ? `${workflow.feedback}\n\n---\n${ciFeedback}`
+      : ciFeedback;
+
+    // Mark any proposed patch sets as rejected to avoid re-processing
+    await this.prisma.patchSet.updateMany({
+      where: { workflowId, status: 'proposed' },
+      data: { status: 'rejected' }
+    });
+
+    // Record decision and move workflow back to patches stage
+    const decision = await this.prisma.stageDecision.create({
+      data: {
+        workflowId,
+        stage: 'sandbox',
+        decision: 'request_changes',
+        reason: reason || null,
+        actorId: actorId || null,
+        actorName: actorName || null
+      }
+    });
+
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: {
+        stage: 'patches',
+        stageStatus: 'pending',
+        stageUpdatedAt: new Date(),
+        feedback: combinedFeedback
+      }
+    });
+
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: 'ui.stage.sandbox.regenerate_patches',
+        payload: { reason, actorId, actorName, sandboxArtifactId: latestSandbox?.id || null }
+      }
+    });
+
+    await this.orchestrateQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_STAGE_CHANGES_REQUESTED', stage: 'patches', reason: ciFeedback }
+    });
+
+    return { ok: true, workflowId, stage: 'patches', newStatus: 'pending', decisionId: decision.id };
+  }
 }

@@ -228,8 +228,14 @@ describe('GitHubClient interface', () => {
     expect(typeof client.getRepository).toBe('function');
     expect(typeof client.getFileContents).toBe('function');
     expect(typeof client.getBranch).toBe('function');
+    expect(typeof client.getTree).toBe('function');
+    expect(typeof client.dispatchWorkflow).toBe('function');
+    expect(typeof client.listWorkflowRuns).toBe('function');
+    expect(typeof client.getWorkflowRun).toBe('function');
+    expect(typeof client.getWorkflowRunJobs).toBe('function');
     expect(typeof client.createBranch).toBe('function');
     expect(typeof client.updateFile).toBe('function');
+    expect(typeof client.deleteFile).toBe('function');
     expect(typeof client.openPullRequest).toBe('function');
   });
 });

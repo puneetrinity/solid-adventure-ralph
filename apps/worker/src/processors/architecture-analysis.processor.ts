@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import {
   RunRecorder,
   LLMRunner,
-  createGroqProvider,
+  createProviderWithFallback,
   ArchitectureAnalysisSchema,
   safeParseLLMResponse,
   SCHEMA_DESCRIPTIONS,
@@ -107,11 +107,11 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
         }
       }
 
-      const groqProvider = createGroqProvider();
+      const llmProvider = createProviderWithFallback('architecture');
       let artifact: ArchitectureArtifact;
 
-      if (groqProvider) {
-        const llmRunner = new LLMRunner({ provider: groqProvider }, this.prisma);
+      this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for architecture analysis`);
+      const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
         const promptParts = [
           `You are a senior software architect designing the technical architecture for a feature.`,
@@ -221,21 +221,6 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
         } else {
           throw new Error(`LLM call failed: ${response.error}`);
         }
-      } else {
-        this.logger.warn('GROQ_API_KEY not set, using stub architecture analysis');
-        artifact = {
-          kind: 'ArchitectureV1',
-          overview: 'Stub analysis - GROQ_API_KEY not configured',
-          components: [],
-          dataFlow: 'LLM not configured',
-          integrationPoints: [],
-          technicalDecisions: [],
-          inputs: {
-            featureGoal: workflow.featureGoal || workflow.goal || '',
-            feasibilityRecommendation: feasibilityData.recommendation || 'unknown'
-          }
-        };
-      }
 
       const artifactContent = JSON.stringify(artifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');
