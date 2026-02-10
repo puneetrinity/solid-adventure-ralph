@@ -96,12 +96,14 @@ ${content}`;
               budget: { maxInputTokens: 50000, maxOutputTokens: 1000, maxTotalCost: 500 },
             });
 
-            if (response.success && response.rawContent) {
+            if (!response.success) {
+              this.logger.warn(`LLM summarization failed: ${response.error}`);
+            } else if (response.rawContent) {
               summary = response.rawContent;
               this.logger.log(`Generated summary for ${repoOwner}/${repoName} (${summary.length} chars)`);
             }
           } catch (err) {
-            this.logger.warn(`LLM summarization failed: ${err}`);
+            this.logger.warn(`LLM summarization exception: ${err}`);
           }
       } else {
         // No context file - generate one by analyzing repo structure
@@ -176,6 +178,12 @@ Format it as a proper markdown document. Be specific and accurate based on the f
           const response = await llmRunner.run('documenter', generatePrompt, {
             budget: { maxInputTokens: 100000, maxOutputTokens: 4000, maxTotalCost: 1000 },
           });
+
+          if (!response.success) {
+            this.logger.warn(`LLM context generation failed: ${response.error}`);
+          } else if (!response.rawContent) {
+            this.logger.warn(`LLM returned success but empty content`);
+          }
 
           if (response.success && response.rawContent) {
             content = response.rawContent;
