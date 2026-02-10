@@ -24,7 +24,7 @@ module.exports = {
     '^@arch-orchestrator/db/(.*)$': '<rootDir>/packages/db/src/$1'
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@octokit|universal-user-agent)/)'
+    'node_modules/(?!(@octokit|before-after-hook|universal-user-agent|universal-github-app-jwt)/)'
   ],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {

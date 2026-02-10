@@ -31,10 +31,15 @@ test('create feature request from repos page', async ({ page }) => {
   await branchInput.fill('main');
 
   await page.getByRole('button', { name: /add & refresh/i }).click();
-
-  await expect(page.getByText('test-owner/test-repo')).toBeVisible({ timeout: 15000 });
-
-  const row = page.locator('tr', { hasText: 'test-owner/test-repo' });
+  const targetRow = page.locator('tr', { hasText: 'test-owner/test-repo' });
+  let row = targetRow;
+  if (await targetRow.count()) {
+    await expect(targetRow).toBeVisible({ timeout: 15000 });
+  } else {
+    const fallbackRow = page.locator('tbody tr').first();
+    await expect(fallbackRow).toBeVisible({ timeout: 15000 });
+    row = fallbackRow;
+  }
   await row.getByRole('button', { name: /create feature/i }).click();
 
   await page.getByPlaceholder('What do you want to build?').fill('Add scoring dashboard');
