@@ -27,7 +27,7 @@ async function waitForStage(
   while (Date.now() - started < timeoutMs) {
     const res = await fetch(`${baseUrl}/api/workflows/${workflowId}`, { headers: headers() });
     if (res.ok) {
-      const data = await res.json();
+      const data = await res.json() as { stage: string; stageStatus: string };
       last = data;
       if (data.stage === stage && data.stageStatus === status) {
         return data;
@@ -55,7 +55,7 @@ run('workflow stage transitions (feasibility → architecture → timeline)', as
   });
 
   expect(createRes.ok).toBe(true);
-  const created = await createRes.json();
+  const created = await createRes.json() as { id?: string; workflow?: { id: string } };
   const workflowId = created.id || created.workflow?.id;
   expect(workflowId).toBeTruthy();
 
