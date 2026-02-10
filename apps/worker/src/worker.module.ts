@@ -5,13 +5,14 @@ import { IngestContextProcessor } from './processors/ingest-context.processor';
 import { ApplyPatchesProcessor } from './processors/apply-patches.processor';
 import { EvaluatePolicyProcessor } from './processors/evaluate-policy.processor';
 import { SummaryAnalysisProcessor } from './processors/summary-analysis.processor';
+import { SandboxValidationProcessor } from './processors/sandbox-validation.processor';
 import { OrchestrateProcessor } from './processors/orchestrate.processor';
 import { RefreshContextProcessor } from './processors/refresh-context.processor';
 import { FeasibilityAnalysisProcessor } from './processors/feasibility-analysis.processor';
 import { ArchitectureAnalysisProcessor } from './processors/architecture-analysis.processor';
 import { TimelineAnalysisProcessor } from './processors/timeline-analysis.processor';
 import { OrchestratorService } from './orchestrator/orchestrator.service';
-import { StubGitHubClient, type GitHubClient } from '@arch-orchestrator/core';
+import { StubGitHubClient, type GitHubClient, type WorkflowRunInfo, type WorkflowRunList } from '@arch-orchestrator/core';
 import { Octokit } from '@octokit/rest';
 import { GITHUB_CLIENT_TOKEN } from './constants';
 
@@ -31,7 +32,10 @@ class TokenGitHubClient implements GitHubClient {
       fullName: data.full_name,
       defaultBranch: data.default_branch,
       private: data.private,
-      htmlUrl: data.html_url
+      htmlUrl: data.html_url,
+      description: data.description,
+      language: data.language,
+      topics: data.topics
     };
   }
 
@@ -76,6 +80,79 @@ class TokenGitHubClient implements GitHubClient {
         size: item.size
       })),
       truncated: data.truncated
+    };
+  }
+
+  async dispatchWorkflow(params: { owner: string; repo: string; workflowId: string; ref: string; inputs?: Record<string, string> }) {
+    await this.octokit.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+      owner: params.owner,
+      repo: params.repo,
+      workflow_id: params.workflowId,
+      ref: params.ref,
+      inputs: params.inputs ?? {}
+    });
+  }
+
+  async listWorkflowRuns(params: { owner: string; repo: string; workflowId?: string; branch?: string; event?: string; perPage?: number }): Promise<WorkflowRunList> {
+    const mapRun = (run: any): WorkflowRunInfo => ({
+      id: run.id,
+      status: (run.status as WorkflowRunInfo['status']) ?? 'queued',
+      conclusion: run.conclusion as WorkflowRunInfo['conclusion'],
+      htmlUrl: run.html_url,
+      logsUrl: run.logs_url,
+      headSha: run.head_sha,
+      headBranch: run.head_branch ?? undefined,
+      event: run.event,
+      createdAt: run.created_at,
+      updatedAt: run.updated_at
+    });
+
+    if (params.workflowId) {
+      const { data } = await this.octokit.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
+        owner: params.owner,
+        repo: params.repo,
+        workflow_id: params.workflowId,
+        branch: params.branch,
+        event: params.event,
+        per_page: params.perPage ?? 20
+      });
+      return {
+        totalCount: data.total_count ?? data.workflow_runs.length,
+        runs: data.workflow_runs.map(mapRun)
+      };
+    }
+
+    const { data } = await this.octokit.request('GET /repos/{owner}/{repo}/actions/runs', {
+      owner: params.owner,
+      repo: params.repo,
+      branch: params.branch,
+      event: params.event,
+      per_page: params.perPage ?? 20
+    });
+
+    return {
+      totalCount: data.total_count ?? data.workflow_runs.length,
+      runs: data.workflow_runs.map(mapRun)
+    };
+  }
+
+  async getWorkflowRun(params: { owner: string; repo: string; runId: number }): Promise<WorkflowRunInfo> {
+    const { data } = await this.octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
+      owner: params.owner,
+      repo: params.repo,
+      run_id: params.runId
+    });
+    return {
+      id: data.id,
+      status: (data.status as WorkflowRunInfo['status']) ?? 'queued',
+      conclusion: data.conclusion as WorkflowRunInfo['conclusion'],
+      htmlUrl: data.html_url,
+      logsUrl: data.logs_url,
+      headSha: data.head_sha,
+      headBranch: data.head_branch ?? undefined,
+      event: data.event,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
     };
   }
 
@@ -139,21 +216,53 @@ function createGitHubClient(): GitHubClient {
   return new StubGitHubClient();
 }
 
+// Default job options for retry with exponential backoff
+const DEFAULT_JOB_OPTIONS = {
+  attempts: 3,
+  backoff: {
+    type: 'exponential' as const,
+    delay: 5000, // 5s initial delay, then 10s, 20s
+  },
+  removeOnComplete: 100, // Keep last 100 completed jobs
+  removeOnFail: 50, // Keep last 50 failed jobs
+};
+
+// LLM-heavy jobs get more time and retries
+const LLM_JOB_OPTIONS = {
+  ...DEFAULT_JOB_OPTIONS,
+  attempts: 3,
+  backoff: {
+    type: 'exponential' as const,
+    delay: 10000, // 10s initial delay for LLM rate limits
+  },
+};
+
+// Quick orchestration jobs
+const ORCHESTRATE_JOB_OPTIONS = {
+  ...DEFAULT_JOB_OPTIONS,
+  attempts: 5,
+  backoff: {
+    type: 'exponential' as const,
+    delay: 2000,
+  },
+};
+
 @Module({
   imports: [
     BullModule.forRoot({
       connection: parseRedisUrl(process.env.REDIS_URL || 'redis://localhost:6379')
     }),
-    BullModule.registerQueue({ name: 'workflow' }),
-    BullModule.registerQueue({ name: 'orchestrate' }),
-    BullModule.registerQueue({ name: 'ingest_context' }),
-    BullModule.registerQueue({ name: 'apply_patches' }),
-    BullModule.registerQueue({ name: 'evaluate_policy' }),
-    BullModule.registerQueue({ name: 'refresh_context' }),
-    BullModule.registerQueue({ name: 'feasibility' }),
-    BullModule.registerQueue({ name: 'architecture' }),
-    BullModule.registerQueue({ name: 'timeline' }),
-    BullModule.registerQueue({ name: 'summary' })
+    BullModule.registerQueue({ name: 'workflow', defaultJobOptions: DEFAULT_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'orchestrate', defaultJobOptions: ORCHESTRATE_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'ingest_context', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'apply_patches', defaultJobOptions: DEFAULT_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'evaluate_policy', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'refresh_context', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'feasibility', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'architecture', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'timeline', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'summary', defaultJobOptions: LLM_JOB_OPTIONS }),
+    BullModule.registerQueue({ name: 'sandbox', defaultJobOptions: DEFAULT_JOB_OPTIONS })
   ],
   providers: [
     // Orchestrator (Phase 3)
@@ -169,6 +278,7 @@ function createGitHubClient(): GitHubClient {
     ApplyPatchesProcessor,
     EvaluatePolicyProcessor,
     RefreshContextProcessor,
+    SandboxValidationProcessor,
 
     // GitHub client - real when GITHUB_TOKEN is set, stub otherwise
     {

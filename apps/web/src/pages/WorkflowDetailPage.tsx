@@ -30,6 +30,13 @@ import {
   FileDiff,
   Shield,
   Rocket,
+  History,
+  Play,
+  Pause,
+  AlertTriangle,
+  ThumbsUp,
+  ThumbsDown,
+  Edit3,
 } from 'lucide-react';
 import { useWorkflow } from '../hooks/use-workflow';
 import { WorkflowStatusBadge, CostSummary } from '../components/workflow';
@@ -44,8 +51,10 @@ import type {
   PullRequest,
   WorkflowRun,
   WorkflowRepo,
+  WorkflowEvent,
   GatedStage,
   StageStatus,
+  StageDecision,
 } from '../types';
 
 type RepoContextStatus = {
@@ -70,7 +79,7 @@ export function WorkflowDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { workflow, isLoading, error, refetch, isPolling, lastUpdated } = useWorkflow(id!);
-  const [activeTab, setActiveTab] = useState<'overview' | 'feasibility' | 'architecture' | 'timeline' | 'summary' | 'artifacts' | 'policy' | 'patches' | 'runs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'feasibility' | 'architecture' | 'timeline' | 'summary' | 'artifacts' | 'policy' | 'sandbox' | 'patches' | 'runs' | 'activity'>('overview');
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -212,7 +221,7 @@ export function WorkflowDetailPage() {
     if (!workflow || !workflow.stage) return;
     setStageActionLoading(true);
     try {
-      await api.workflows.requestStageChanges(workflow.id, workflow.stage, 'Retry stage');
+      await api.workflows.retryStage(workflow.id, workflow.stage);
       await refetch();
     } catch (err) {
       console.error('Failed to retry stage:', err);
@@ -316,6 +325,16 @@ export function WorkflowDetailPage() {
             <RefreshCw className="h-4 w-4" />
             Refresh
           </button>
+          {workflow.stage && ['ready', 'needs_changes', 'blocked'].includes(workflow.stageStatus || '') && (
+            <button
+              onClick={handleStageRetry}
+              disabled={stageActionLoading}
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-white border border-orange-300 text-orange-700 rounded-md hover:bg-orange-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${stageActionLoading ? 'animate-spin' : ''}`} />
+              Retry Stage
+            </button>
+          )}
           {canCancel && (
             <button
               onClick={() => setShowCancelModal(true)}
@@ -471,6 +490,7 @@ export function WorkflowDetailPage() {
         <StagePipeline
           stage={workflow.stage}
           stageStatus={workflow.stageStatus || 'pending'}
+          stageUpdatedAt={workflow.stageUpdatedAt}
           hasBlockingViolations={workflow.policyViolations?.some(v => v.severity === 'BLOCK') ?? false}
           onApprove={handleStageApprove}
           onReject={() => setShowStageRejectModal(true)}
@@ -683,15 +703,16 @@ export function WorkflowDetailPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-4">
-          {(['overview', 'feasibility', 'architecture', 'timeline', 'summary', 'artifacts', 'policy', 'patches', 'runs'] as const).map(tab => {
+          {(['overview', 'feasibility', 'architecture', 'timeline', 'summary', 'artifacts', 'patches', 'policy', 'sandbox', 'runs', 'activity'] as const).map(tab => {
             const hasViolations = tab === 'policy' && (workflow.policyViolations?.length ?? 0) > 0;
             const hasBlockingViolations = tab === 'policy' && workflow.policyViolations?.some(v => v.severity === 'BLOCK');
             const runsCount = tab === 'runs' ? (workflow.runs?.length ?? 0) : 0;
+            const eventsCount = tab === 'activity' ? (workflow.events?.length ?? 0) : 0;
             const reposCount = tab === 'architecture' ? (workflow.repos?.length ?? 0) : 0;
             const hasFeasibility = tab === 'feasibility' && workflow.artifacts?.some(a => a.kind === 'FeasibilityV1');
 
             // Gate-locking: determine which tabs are accessible based on current stage
-            const stageOrder = ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'pr', 'done'];
+            const stageOrder = ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'sandbox', 'pr', 'done'];
             const currentStageIndex = workflow.stage ? stageOrder.indexOf(workflow.stage) : 0;
 
             // Map tabs to stage requirements
@@ -704,7 +725,9 @@ export function WorkflowDetailPage() {
               'artifacts': -1, // Always accessible
               'patches': 4,
               'policy': 5,
+              'sandbox': 6,
               'runs': -1,  // Always accessible
+              'activity': -1, // Always accessible
             };
 
             const tabRequiredStage = tabStageMap[tab] ?? -1;
@@ -712,7 +735,8 @@ export function WorkflowDetailPage() {
             const hasArtifact = tab === 'feasibility' ? workflow.artifacts?.some(a => a.kind === 'FeasibilityV1') :
                               tab === 'architecture' ? workflow.artifacts?.some(a => a.kind === 'ArchitectureV1') :
                               tab === 'timeline' ? workflow.artifacts?.some(a => a.kind === 'TimelineV1') :
-                              tab === 'summary' ? workflow.artifacts?.some(a => a.kind === 'SummaryV1') : false;
+                              tab === 'summary' ? workflow.artifacts?.some(a => a.kind === 'SummaryV1') :
+                              tab === 'sandbox' ? workflow.artifacts?.some(a => a.kind === 'SandboxResultV1') : false;
 
             return (
               <button
@@ -742,6 +766,11 @@ export function WorkflowDetailPage() {
                     {runsCount}
                   </span>
                 )}
+                {eventsCount > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600">
+                    {eventsCount}
+                  </span>
+                )}
                 {reposCount > 1 && (
                   <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-blue-100 text-blue-600">
                     {reposCount}
@@ -767,6 +796,7 @@ export function WorkflowDetailPage() {
         {activeTab === 'summary' && <SummaryTab workflow={workflow} />}
         {activeTab === 'artifacts' && <ArtifactsTab artifacts={workflow.artifacts || []} />}
         {activeTab === 'policy' && <PolicyTab violations={workflow.policyViolations || []} />}
+        {activeTab === 'sandbox' && <SandboxTab workflow={workflow} />}
         {activeTab === 'patches' && (
           <PatchSetsTab
             workflowId={workflow.id}
@@ -776,6 +806,7 @@ export function WorkflowDetailPage() {
           />
         )}
         {activeTab === 'runs' && <RunsTab workflowId={workflow.id} runs={workflow.runs || []} />}
+        {activeTab === 'activity' && <ActivityTab workflow={workflow} />}
       </div>
     </div>
   );
@@ -1457,6 +1488,86 @@ function SummaryTab({ workflow }: { workflow: Workflow }) {
   );
 }
 
+function SandboxTab({ workflow }: { workflow: Workflow }) {
+  const artifact = workflow.artifacts?.find(a => a.kind === 'SandboxResultV1');
+  if (!artifact) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 p-6 text-center">
+        <div className="text-gray-500">No sandbox validation results yet.</div>
+      </div>
+    );
+  }
+
+  let data: any = {};
+  try {
+    data = JSON.parse(artifact.content);
+  } catch {
+    data = {};
+  }
+
+  const status = data.status || data.conclusion || 'unknown';
+  const isPass = status === 'pass' || status === 'success';
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900">Sandbox Validation</h3>
+          <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+            isPass ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+          }`}>
+            {isPass ? 'Passed' : 'Failed'}
+          </span>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4 text-sm">
+          <div>
+            <div className="text-gray-500 uppercase text-xs mb-1">Repository</div>
+            <div className="text-gray-900">{data.repo || `${workflow.repoOwner}/${workflow.repoName}`}</div>
+          </div>
+          <div>
+            <div className="text-gray-500 uppercase text-xs mb-1">Branch</div>
+            <div className="text-gray-900">{data.branch || 'sandbox branch'}</div>
+          </div>
+          <div>
+            <div className="text-gray-500 uppercase text-xs mb-1">Run ID</div>
+            <div className="text-gray-900">{data.runId || '—'}</div>
+          </div>
+          <div>
+            <div className="text-gray-500 uppercase text-xs mb-1">Conclusion</div>
+            <div className="text-gray-900">{data.conclusion || status}</div>
+          </div>
+          {data.durationMs && (
+            <div>
+              <div className="text-gray-500 uppercase text-xs mb-1">Duration</div>
+              <div className="text-gray-900">{(data.durationMs / 1000).toFixed(1)}s</div>
+            </div>
+          )}
+          {data.patchSetId && (
+            <div>
+              <div className="text-gray-500 uppercase text-xs mb-1">PatchSet</div>
+              <div className="text-gray-900">{data.patchSetId}</div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-3 text-sm">
+          {data.runUrl && (
+            <a className="text-blue-600 hover:underline" href={data.runUrl} target="_blank" rel="noreferrer">
+              View GitHub Actions Run →
+            </a>
+          )}
+          {data.logsUrl && (
+            <a className="text-blue-600 hover:underline" href={data.logsUrl} target="_blank" rel="noreferrer">
+              View Logs →
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PolicyTab({ violations }: { violations: PolicyViolation[] }) {
   if (violations.length === 0) {
     return (
@@ -2050,6 +2161,180 @@ function RunsTab({ workflowId, runs }: { workflowId: string; runs: WorkflowRun[]
   );
 }
 
+// Activity/Timeline tab - shows workflow events in a vertical timeline
+function ActivityTab({ workflow }: { workflow: Workflow }) {
+  const events = workflow.events || [];
+  const runs = workflow.runs || [];
+  const decisions = workflow.stageDecisions || [];
+
+  // Combine events, runs, and decisions into a unified timeline
+  type TimelineItem = {
+    id: string;
+    type: 'event' | 'run' | 'decision';
+    timestamp: string;
+    data: WorkflowEvent | WorkflowRun | StageDecision;
+  };
+
+  const timelineItems: TimelineItem[] = [
+    ...events.map(e => ({ id: e.id, type: 'event' as const, timestamp: e.createdAt, data: e })),
+    ...runs.map(r => ({ id: r.id, type: 'run' as const, timestamp: r.startedAt, data: r })),
+    ...decisions.map(d => ({ id: d.id, type: 'decision' as const, timestamp: d.createdAt, data: d })),
+  ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  if (timelineItems.length === 0) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 p-6 text-center text-gray-500">
+        <History className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+        No activity recorded yet
+      </div>
+    );
+  }
+
+  const getEventIcon = (type: string) => {
+    if (type.includes('created') || type.includes('started')) return <Play className="h-4 w-4" />;
+    if (type.includes('completed') || type.includes('approved') || type.includes('done')) return <CheckCircle className="h-4 w-4" />;
+    if (type.includes('failed') || type.includes('rejected') || type.includes('error')) return <XCircle className="h-4 w-4" />;
+    if (type.includes('stage') && type.includes('transition')) return <ArrowLeft className="h-4 w-4 rotate-180" />;
+    if (type.includes('policy')) return <Shield className="h-4 w-4" />;
+    if (type.includes('patch')) return <FileDiff className="h-4 w-4" />;
+    if (type.includes('context')) return <FileText className="h-4 w-4" />;
+    return <Clock className="h-4 w-4" />;
+  };
+
+  const getEventColor = (item: TimelineItem) => {
+    if (item.type === 'decision') {
+      const decision = item.data as StageDecision;
+      if (decision.decision === 'approve') return 'bg-green-500';
+      if (decision.decision === 'reject') return 'bg-red-500';
+      return 'bg-yellow-500';
+    }
+    if (item.type === 'run') {
+      const run = item.data as WorkflowRun;
+      if (run.status === 'completed') return 'bg-green-500';
+      if (run.status === 'failed') return 'bg-red-500';
+      if (run.status === 'running') return 'bg-blue-500';
+      return 'bg-gray-400';
+    }
+    const event = item.data as WorkflowEvent;
+    if (event.type.includes('completed') || event.type.includes('approved') || event.type.includes('done')) return 'bg-green-500';
+    if (event.type.includes('failed') || event.type.includes('rejected') || event.type.includes('error')) return 'bg-red-500';
+    if (event.type.includes('blocked')) return 'bg-yellow-500';
+    return 'bg-blue-500';
+  };
+
+  const formatEventType = (type: string) => {
+    return type
+      .replace(/_/g, ' ')
+      .replace(/\./g, ' → ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  };
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4">
+      <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-100">
+        <History className="h-5 w-5 text-gray-400" />
+        <h3 className="font-medium text-gray-900">Activity Timeline</h3>
+        <span className="text-xs text-gray-500">({timelineItems.length} events)</span>
+      </div>
+
+      <div className="relative">
+        {/* Vertical line */}
+        <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-gray-200" />
+
+        {/* Timeline items */}
+        <div className="space-y-4">
+          {timelineItems.map((item, index) => (
+            <div key={item.id} className="relative flex gap-4 pl-10">
+              {/* Dot on timeline */}
+              <div className={`absolute left-2.5 w-3 h-3 rounded-full ${getEventColor(item)} ring-2 ring-white`} />
+
+              {/* Content */}
+              <div className="flex-1 min-w-0 pb-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-gray-400">
+                      {item.type === 'event' && getEventIcon((item.data as WorkflowEvent).type)}
+                      {item.type === 'run' && <Play className="h-4 w-4" />}
+                      {item.type === 'decision' && (
+                        (item.data as StageDecision).decision === 'approve' ? <ThumbsUp className="h-4 w-4" /> :
+                        (item.data as StageDecision).decision === 'reject' ? <ThumbsDown className="h-4 w-4" /> :
+                        <Edit3 className="h-4 w-4" />
+                      )}
+                    </span>
+                    <span className="font-medium text-gray-900 truncate">
+                      {item.type === 'event' && formatEventType((item.data as WorkflowEvent).type)}
+                      {item.type === 'run' && (item.data as WorkflowRun).jobName}
+                      {item.type === 'decision' && `Stage ${(item.data as StageDecision).stage} ${(item.data as StageDecision).decision}d`}
+                    </span>
+                    {item.type === 'run' && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                        (item.data as WorkflowRun).status === 'completed' ? 'bg-green-100 text-green-700' :
+                        (item.data as WorkflowRun).status === 'failed' ? 'bg-red-100 text-red-700' :
+                        (item.data as WorkflowRun).status === 'running' ? 'bg-blue-100 text-blue-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {(item.data as WorkflowRun).status}
+                      </span>
+                    )}
+                    {item.type === 'decision' && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                        (item.data as StageDecision).decision === 'approve' ? 'bg-green-100 text-green-700' :
+                        (item.data as StageDecision).decision === 'reject' ? 'bg-red-100 text-red-700' :
+                        'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {(item.data as StageDecision).stage}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-400 whitespace-nowrap">
+                    {new Date(item.timestamp).toLocaleString()}
+                  </span>
+                </div>
+
+                {/* Additional details */}
+                {item.type === 'event' && Object.keys((item.data as WorkflowEvent).payload || {}).length > 0 && (
+                  <div className="mt-2 text-xs text-gray-500 bg-gray-50 rounded p-2 font-mono overflow-x-auto">
+                    {JSON.stringify((item.data as WorkflowEvent).payload, null, 2).slice(0, 200)}
+                    {JSON.stringify((item.data as WorkflowEvent).payload).length > 200 && '...'}
+                  </div>
+                )}
+
+                {item.type === 'run' && (item.data as WorkflowRun).errorMsg && (
+                  <div className="mt-2 text-xs text-red-600 bg-red-50 rounded p-2">
+                    {(item.data as WorkflowRun).errorMsg}
+                  </div>
+                )}
+
+                {item.type === 'run' && (item.data as WorkflowRun).durationMs && (
+                  <div className="mt-1 text-xs text-gray-500">
+                    Duration: {((item.data as WorkflowRun).durationMs! / 1000).toFixed(1)}s
+                    {(item.data as WorkflowRun).totalTokens && ` • ${(item.data as WorkflowRun).totalTokens?.toLocaleString()} tokens`}
+                  </div>
+                )}
+
+                {item.type === 'decision' && (item.data as StageDecision).reason && (
+                  <div className="mt-2 text-sm text-gray-600 bg-gray-50 rounded p-2">
+                    "{(item.data as StageDecision).reason}"
+                  </div>
+                )}
+
+                {item.type === 'decision' && (item.data as StageDecision).actorName && (
+                  <div className="mt-1 text-xs text-gray-500 flex items-center gap-1">
+                    <User className="h-3 w-3" />
+                    {(item.data as StageDecision).actorName}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Stage pipeline component
 const STAGES: { key: GatedStage; label: string; icon: typeof Lightbulb }[] = [
   { key: 'feasibility', label: 'Feasibility', icon: Lightbulb },
@@ -2058,12 +2343,17 @@ const STAGES: { key: GatedStage; label: string; icon: typeof Lightbulb }[] = [
   { key: 'summary', label: 'Summary', icon: FileText },
   { key: 'patches', label: 'Patches', icon: FileDiff },
   { key: 'policy', label: 'Policy', icon: Shield },
+  { key: 'sandbox', label: 'Sandbox', icon: ShieldCheck },
   { key: 'pr', label: 'PR', icon: Rocket },
 ];
+
+// Threshold for considering a stage "stuck" (10 minutes in ms)
+const STUCK_THRESHOLD_MS = 10 * 60 * 1000;
 
 function StagePipeline({
   stage,
   stageStatus,
+  stageUpdatedAt,
   hasBlockingViolations,
   onApprove,
   onReject,
@@ -2073,6 +2363,7 @@ function StagePipeline({
 }: {
   stage: GatedStage;
   stageStatus: StageStatus;
+  stageUpdatedAt?: string;
   hasBlockingViolations: boolean;
   onApprove: () => void;
   onReject: () => void;
@@ -2084,7 +2375,13 @@ function StagePipeline({
   const isTerminal = stage === 'done' || stageStatus === 'rejected';
   const isPolicyBlocked = stage === 'policy' && hasBlockingViolations;
   const canTakeAction = stageStatus === 'ready' && !isLoading && !isPolicyBlocked;
-  const canRetry = (stageStatus === 'needs_changes' || stageStatus === 'blocked') && !isLoading;
+
+  // Detect stuck stages (processing for too long)
+  const isStuck = stageStatus === 'processing' && stageUpdatedAt
+    ? (Date.now() - new Date(stageUpdatedAt).getTime()) > STUCK_THRESHOLD_MS
+    : false;
+
+  const canRetry = (['needs_changes', 'blocked', 'ready'].includes(stageStatus) || isStuck) && !isLoading;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -2143,7 +2440,9 @@ function StagePipeline({
       {/* Current stage info and actions */}
       {!isTerminal && (
         <div className={`rounded-lg p-4 ${
-          stageStatus === 'ready' && isPolicyBlocked
+          isStuck
+            ? 'bg-red-50 border border-red-200'
+            : stageStatus === 'ready' && isPolicyBlocked
             ? 'bg-red-50 border border-red-200'
             : stageStatus === 'ready'
             ? 'bg-yellow-50 border border-yellow-200'
@@ -2155,7 +2454,10 @@ function StagePipeline({
         }`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {stageStatus === 'processing' && (
+              {isStuck && (
+                <AlertTriangle className="h-5 w-5 text-red-500" />
+              )}
+              {stageStatus === 'processing' && !isStuck && (
                 <RefreshCw className="h-5 w-5 text-blue-500 animate-spin" />
               )}
               {stageStatus === 'ready' && isPolicyBlocked && (
@@ -2175,20 +2477,23 @@ function StagePipeline({
               )}
               <div>
                 <h3 className={`text-sm font-medium ${
+                  isStuck ? 'text-red-800' :
                   stageStatus === 'ready' && isPolicyBlocked ? 'text-red-800' :
                   stageStatus === 'ready' ? 'text-yellow-800' :
                   stageStatus === 'processing' ? 'text-blue-800' :
                   stageStatus === 'needs_changes' ? 'text-orange-800' :
                   'text-gray-700'
                 }`}>
-                  {stageStatus === 'ready' && isPolicyBlocked && 'Policy has blocking violations'}
-                  {stageStatus === 'ready' && !isPolicyBlocked && `${stage.charAt(0).toUpperCase() + stage.slice(1)} analysis ready for review`}
-                  {stageStatus === 'processing' && `Running ${stage} analysis...`}
+                  {isStuck && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage appears stuck`}
+                  {!isStuck && stageStatus === 'ready' && isPolicyBlocked && 'Policy has blocking violations'}
+                  {!isStuck && stageStatus === 'ready' && !isPolicyBlocked && `${stage.charAt(0).toUpperCase() + stage.slice(1)} analysis ready for review`}
+                  {!isStuck && stageStatus === 'processing' && `Running ${stage} analysis...`}
                   {stageStatus === 'needs_changes' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage needs changes`}
                   {stageStatus === 'blocked' && `${stage.charAt(0).toUpperCase() + stage.slice(1)} stage blocked`}
                   {stageStatus === 'pending' && `Waiting to start ${stage} stage`}
                 </h3>
                 <p className={`text-sm ${
+                  isStuck ? 'text-red-700' :
                   stageStatus === 'ready' && isPolicyBlocked ? 'text-red-700' :
                   stageStatus === 'ready' ? 'text-yellow-700' :
                   stageStatus === 'processing' ? 'text-blue-700' :
@@ -2196,9 +2501,10 @@ function StagePipeline({
                   stageStatus === 'blocked' ? 'text-orange-700' :
                   'text-gray-500'
                 }`}>
-                  {stageStatus === 'ready' && isPolicyBlocked && 'Resolve blocking violations in the Policy tab before approving.'}
-                  {stageStatus === 'ready' && !isPolicyBlocked && 'Review the analysis and approve to proceed to the next stage.'}
-                  {stageStatus === 'processing' && 'Please wait while the analysis is being generated.'}
+                  {isStuck && 'This stage has been processing for over 10 minutes. Click Retry to restart.'}
+                  {!isStuck && stageStatus === 'ready' && isPolicyBlocked && 'Resolve blocking violations in the Policy tab before approving.'}
+                  {!isStuck && stageStatus === 'ready' && !isPolicyBlocked && 'Review the analysis and approve to proceed to the next stage.'}
+                  {!isStuck && stageStatus === 'processing' && 'Please wait while the analysis is being generated.'}
                   {stageStatus === 'needs_changes' && 'Update feedback or retry the stage to re-run the analysis.'}
                   {stageStatus === 'blocked' && 'This stage was blocked due to an error. Retry to re-run the analysis.'}
                   {stageStatus === 'pending' && 'The previous stage needs to be approved first.'}

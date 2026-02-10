@@ -20,7 +20,8 @@ export class OrchestratorService {
     @InjectQueue('feasibility') private readonly feasibilityQueue: Queue,
     @InjectQueue('architecture') private readonly architectureQueue: Queue,
     @InjectQueue('timeline') private readonly timelineQueue: Queue,
-    @InjectQueue('summary') private readonly summaryQueue: Queue
+    @InjectQueue('summary') private readonly summaryQueue: Queue,
+    @InjectQueue('sandbox') private readonly sandboxQueue: Queue
   ) {}
 
   /**
@@ -92,6 +93,8 @@ export class OrchestratorService {
       await this.timelineQueue.add(jobName, payload);
     } else if (jobName === 'summary_analysis') {
       await this.summaryQueue.add(jobName, payload);
+    } else if (jobName === 'sandbox_validation') {
+      await this.sandboxQueue.add(jobName, payload);
     } else {
       // Fallback to workflow queue for unknown job types
       await this.workflowQueue.add(jobName, payload);

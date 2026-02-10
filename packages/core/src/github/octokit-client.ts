@@ -18,6 +18,11 @@ import type {
   BranchInfo,
   GetTreeParams,
   TreeInfo,
+  DispatchWorkflowParams,
+  ListWorkflowRunsParams,
+  WorkflowRunList,
+  GetWorkflowRunParams,
+  WorkflowRunInfo,
   CreateBranchParams,
   CreateBranchResult,
   UpdateFileParams,
@@ -90,7 +95,10 @@ export class OctokitGitHubClient implements GitHubClient {
       fullName: data.full_name,
       defaultBranch: data.default_branch,
       private: data.private,
-      htmlUrl: data.html_url
+      htmlUrl: data.html_url,
+      description: data.description,
+      language: data.language,
+      topics: data.topics
     };
   }
 
@@ -156,6 +164,76 @@ export class OctokitGitHubClient implements GitHubClient {
         size: item.size
       })),
       truncated: data.truncated
+    };
+  }
+
+  async dispatchWorkflow(params: DispatchWorkflowParams): Promise<void> {
+    await this.octokit.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+      owner: params.owner,
+      repo: params.repo,
+      workflow_id: params.workflowId,
+      ref: params.ref,
+      inputs: params.inputs ?? {}
+    });
+  }
+
+  async listWorkflowRuns(params: ListWorkflowRunsParams): Promise<WorkflowRunList> {
+    const request = params.workflowId
+      ? {
+          url: 'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
+          owner: params.owner,
+          repo: params.repo,
+          workflow_id: params.workflowId,
+          branch: params.branch,
+          event: params.event,
+          per_page: params.perPage ?? 20
+        }
+      : {
+          url: 'GET /repos/{owner}/{repo}/actions/runs',
+          owner: params.owner,
+          repo: params.repo,
+          branch: params.branch,
+          event: params.event,
+          per_page: params.perPage ?? 20
+        };
+
+    const { data } = await this.octokit.request(request as any);
+
+    return {
+      totalCount: (data as any).total_count ?? (data as any).workflow_runs.length,
+      runs: (data as any).workflow_runs.map((run: any) => ({
+        id: run.id,
+        status: run.status as WorkflowRunInfo['status'],
+        conclusion: run.conclusion as WorkflowRunInfo['conclusion'],
+        htmlUrl: run.html_url,
+        logsUrl: run.logs_url,
+        headSha: run.head_sha,
+        headBranch: run.head_branch,
+        event: run.event,
+        createdAt: run.created_at,
+        updatedAt: run.updated_at
+      }))
+    };
+  }
+
+  async getWorkflowRun(params: GetWorkflowRunParams): Promise<WorkflowRunInfo> {
+    const { data } = await this.octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
+      owner: params.owner,
+      repo: params.repo,
+      run_id: params.runId
+    });
+
+    return {
+      id: data.id,
+      status: data.status as WorkflowRunInfo['status'],
+      conclusion: data.conclusion as WorkflowRunInfo['conclusion'],
+      htmlUrl: data.html_url,
+      logsUrl: data.logs_url,
+      headSha: data.head_sha,
+      headBranch: data.head_branch ?? undefined,
+      event: data.event,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
     };
   }
 

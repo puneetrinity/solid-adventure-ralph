@@ -41,6 +41,9 @@ export type RepositoryInfo = {
   defaultBranch: string;
   private: boolean;
   htmlUrl: string;
+  description?: string | null;
+  language?: string | null;
+  topics?: string[];
 };
 
 export type GetFileContentsParams = {
@@ -88,6 +91,51 @@ export type TreeInfo = {
   sha: string;
   tree: TreeItem[];
   truncated: boolean;
+};
+
+// ============================================================================
+// Types for GitHub Actions Operations
+// ============================================================================
+
+export type DispatchWorkflowParams = {
+  owner: string;
+  repo: string;
+  workflowId: string; // workflow file name or ID
+  ref: string; // branch or SHA
+  inputs?: Record<string, string>;
+};
+
+export type WorkflowRunInfo = {
+  id: number;
+  status: 'queued' | 'in_progress' | 'completed';
+  conclusion?: 'success' | 'failure' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | null;
+  htmlUrl?: string;
+  logsUrl?: string;
+  headSha?: string;
+  headBranch?: string;
+  event?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ListWorkflowRunsParams = {
+  owner: string;
+  repo: string;
+  workflowId?: string; // optional: limit to a single workflow
+  branch?: string;
+  event?: string;
+  perPage?: number;
+};
+
+export type WorkflowRunList = {
+  totalCount: number;
+  runs: WorkflowRunInfo[];
+};
+
+export type GetWorkflowRunParams = {
+  owner: string;
+  repo: string;
+  runId: number;
 };
 
 // ============================================================================
@@ -164,6 +212,11 @@ export interface GitHubClient {
   getBranch(params: GetBranchParams): Promise<BranchInfo>;
   getTree(params: GetTreeParams): Promise<TreeInfo>;
 
+  // Actions operations (no approval needed)
+  dispatchWorkflow(params: DispatchWorkflowParams): Promise<void>;
+  listWorkflowRuns(params: ListWorkflowRunsParams): Promise<WorkflowRunList>;
+  getWorkflowRun(params: GetWorkflowRunParams): Promise<WorkflowRunInfo>;
+
   // Write operations (require approval via WriteGate)
   createBranch(params: CreateBranchParams): Promise<CreateBranchResult>;
   updateFile(params: UpdateFileParams): Promise<UpdateFileResult>;
@@ -202,7 +255,10 @@ export class StubGitHubClient implements GitHubClient {
       fullName: `${params.owner}/${params.repo}`,
       defaultBranch: 'main',
       private: false,
-      htmlUrl: `https://github.com/${params.owner}/${params.repo}`
+      htmlUrl: `https://github.com/${params.owner}/${params.repo}`,
+      description: 'Stub repository description',
+      language: 'TypeScript',
+      topics: ['stub', 'testing']
     };
   }
 
@@ -233,6 +289,45 @@ export class StubGitHubClient implements GitHubClient {
         { path: 'src/index.ts', mode: '100644', type: 'blob', sha: 'stub-blob-3', size: 200 },
       ],
       truncated: false
+    };
+  }
+
+  async dispatchWorkflow(_params: DispatchWorkflowParams): Promise<void> {
+    return;
+  }
+
+  async listWorkflowRuns(_params: ListWorkflowRunsParams): Promise<WorkflowRunList> {
+    return {
+      totalCount: 1,
+      runs: [
+        {
+          id: 1,
+          status: 'completed',
+          conclusion: 'success',
+          htmlUrl: 'https://github.com/example/repo/actions/runs/1',
+          logsUrl: 'https://github.com/example/repo/actions/runs/1/logs',
+          headSha: 'stub-sha',
+          headBranch: 'stub-branch',
+          event: 'workflow_dispatch',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ]
+    };
+  }
+
+  async getWorkflowRun(_params: GetWorkflowRunParams): Promise<WorkflowRunInfo> {
+    return {
+      id: 1,
+      status: 'completed',
+      conclusion: 'success',
+      htmlUrl: 'https://github.com/example/repo/actions/runs/1',
+      logsUrl: 'https://github.com/example/repo/actions/runs/1/logs',
+      headSha: 'stub-sha',
+      headBranch: 'stub-branch',
+      event: 'workflow_dispatch',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
   }
 

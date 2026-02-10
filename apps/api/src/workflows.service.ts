@@ -533,14 +533,15 @@ export class WorkflowsService {
   // Stage Actions (Gated Pipeline)
   // ============================================================================
 
-  private readonly VALID_STAGES = ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'pr'];
+  private readonly VALID_STAGES = ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'sandbox', 'pr'];
   private readonly NEXT_STAGE: Record<string, string> = {
     'feasibility': 'architecture',
     'architecture': 'timeline',
     'timeline': 'summary',
     'summary': 'patches',
     'patches': 'policy',
-    'policy': 'pr',
+    'policy': 'sandbox',
+    'sandbox': 'pr',
     'pr': 'done'
   };
 
@@ -749,5 +750,64 @@ export class WorkflowsService {
     });
 
     return { ok: true, workflowId, stage, newStatus: 'needs_changes', decisionId: decision.id };
+  }
+
+  /**
+   * Retry a stage from scratch (no feedback, just re-run).
+   * Sets stageStatus to pending and enqueues the stage job.
+   */
+  async retryStage(
+    workflowId: string,
+    stage: string,
+    actorId?: string,
+    actorName?: string
+  ) {
+    const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
+
+    if (!workflow) {
+      return { ok: false, error: 'WORKFLOW_NOT_FOUND', workflowId, stage, newStatus: '' };
+    }
+
+    // Validate stage
+    if (!this.VALID_STAGES.includes(stage)) {
+      return { ok: false, error: 'INVALID_STAGE', workflowId, stage, newStatus: '' };
+    }
+
+    // Check workflow is at the right stage (can only retry current stage)
+    if (workflow.stage !== stage) {
+      return { ok: false, error: 'WRONG_STAGE', workflowId, stage, newStatus: workflow.stageStatus, currentStage: workflow.stage };
+    }
+
+    // Can only retry if stage is complete or in a retryable state (not pending/processing)
+    const retryableStatuses = ['ready', 'needs_changes', 'blocked', 'approved'];
+    if (!retryableStatuses.includes(workflow.stageStatus || '')) {
+      return { ok: false, error: 'STAGE_NOT_RETRYABLE', workflowId, stage, newStatus: workflow.stageStatus };
+    }
+
+    // Update workflow - reset stage to pending
+    await this.prisma.workflow.update({
+      where: { id: workflowId },
+      data: {
+        stageStatus: 'pending',
+        stageUpdatedAt: new Date(),
+      }
+    });
+
+    // Record event
+    await this.prisma.workflowEvent.create({
+      data: {
+        workflowId,
+        type: `ui.stage.${stage}.retry`,
+        payload: { stage, actorId, actorName }
+      }
+    });
+
+    // Emit event to orchestrator to re-run the stage
+    await this.orchestrateQueue.add('orchestrate', {
+      workflowId,
+      event: { type: 'E_STAGE_RETRY', stage }
+    });
+
+    return { ok: true, workflowId, stage, newStatus: 'pending' };
   }
 }

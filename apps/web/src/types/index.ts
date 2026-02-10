@@ -15,7 +15,7 @@ export type WorkflowState =
   | 'REJECTED';
 
 // Gated pipeline types
-export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'summary' | 'patches' | 'policy' | 'pr' | 'done';
+export type GatedStage = 'feasibility' | 'architecture' | 'timeline' | 'summary' | 'patches' | 'policy' | 'sandbox' | 'pr' | 'done';
 export type StageStatus = 'pending' | 'processing' | 'ready' | 'approved' | 'rejected' | 'blocked' | 'needs_changes';
 
 export interface StageDecision {

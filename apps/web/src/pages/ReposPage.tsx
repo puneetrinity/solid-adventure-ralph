@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   CheckCircle,
+  Copy,
   ExternalLink,
+  FileText,
   FolderGit2,
   Plus,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Modal, Toast, useToast } from '../components/ui';
@@ -55,6 +58,12 @@ export function ReposPage() {
   const [additionalContext, setAdditionalContext] = useState('');
   const [title, setTitle] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+
+  // View context modal
+  const [showContextModal, setShowContextModal] = useState(false);
+  const [contextContent, setContextContent] = useState<string | null>(null);
+  const [contextPath, setContextPath] = useState<string | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
 
   const loadWorkflowCounts = useCallback(async () => {
     const counts: Record<string, number> = {};
@@ -167,6 +176,36 @@ export function ReposPage() {
   const openFeatureModal = (ctx: RepoContext) => {
     setSelectedRepo(ctx);
     setShowFeatureModal(true);
+  };
+
+  const handleViewContext = async (ctx: RepoContext) => {
+    setSelectedRepo(ctx);
+    setContextContent(null);
+    setContextPath(null);
+    setContextLoading(true);
+    setShowContextModal(true);
+
+    try {
+      const result = await api.repos.getContextContent(ctx.repoOwner, ctx.repoName, ctx.baseBranch);
+      setContextContent(result.content);
+      setContextPath(result.contextPath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load context';
+      showToast(message, 'error');
+      setShowContextModal(false);
+    } finally {
+      setContextLoading(false);
+    }
+  };
+
+  const handleCopyContext = async () => {
+    if (!contextContent) return;
+    try {
+      await navigator.clipboard.writeText(contextContent);
+      showToast('Context copied to clipboard', 'success');
+    } catch {
+      showToast('Failed to copy to clipboard', 'error');
+    }
   };
 
   const handleCreateFeature = async () => {
@@ -292,17 +331,31 @@ export function ReposPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      {ctx.status === 'fresh' ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 px-2 py-1 rounded">
-                          <CheckCircle className="h-3 w-3" />
-                          Fresh
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded">
-                          <AlertTriangle className="h-3 w-3" />
-                          Stale
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {ctx.status === 'fresh' ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 px-2 py-1 rounded">
+                            <CheckCircle className="h-3 w-3" />
+                            Fresh
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded">
+                            <AlertTriangle className="h-3 w-3" />
+                            Stale
+                          </span>
+                        )}
+                        {ctx.contextPath && (
+                          <a
+                            href={`https://github.com/${ctx.repoOwner}/${ctx.repoName}/blob/${ctx.baseBranch}/${ctx.contextPath}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                            title={`View ${ctx.contextPath} on GitHub`}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            {ctx.contextPath}
+                          </a>
+                        )}
+                      </div>
                       {ctx.summary && (
                         <div className="mt-2 text-xs text-gray-500 line-clamp-2" title={ctx.summary}>
                           {ctx.summary}
@@ -317,6 +370,14 @@ export function ReposPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleViewContext(ctx)}
+                          className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800"
+                          title="View stored context"
+                        >
+                          <FileText className="h-3 w-3" />
+                          Context
+                        </button>
                         <button
                           onClick={() => handleRefresh(ctx)}
                           disabled={isRefreshing}
@@ -503,6 +564,106 @@ export function ReposPage() {
           </div>
         </div>
       </Modal>
+
+      {/* View Context Modal */}
+      {showContextModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col mx-4">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Repository Context</h3>
+                {selectedRepo && (
+                  <div className="text-sm text-gray-500 font-mono">
+                    {selectedRepo.repoOwner}/{selectedRepo.repoName}
+                    {contextPath && (
+                      <span className="ml-2 text-purple-600">({contextPath})</span>
+                    )}
+                    <span className="ml-3 text-xs text-gray-400 font-sans">
+                      Last refreshed: {new Date(selectedRepo.updatedAt).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setShowContextModal(false)}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Stale/missing warning banner */}
+            {selectedRepo && !contextLoading && (selectedRepo.isStale || !contextContent) && (
+              <div className={`flex items-center gap-2 px-4 py-2 text-sm ${
+                !contextContent
+                  ? 'bg-red-50 text-red-700 border-b border-red-100'
+                  : 'bg-yellow-50 text-yellow-700 border-b border-yellow-100'
+              }`}>
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                {!contextContent
+                  ? 'No context available. Click "Refresh Context" to generate one.'
+                  : 'Context is stale and may be outdated. Consider refreshing.'
+                }
+              </div>
+            )}
+
+            <div className="flex-1 overflow-auto p-4">
+              {contextLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="h-6 w-6 text-gray-400 animate-spin" />
+                  <span className="ml-2 text-sm text-gray-500">Loading context...</span>
+                </div>
+              ) : contextContent ? (
+                <pre className="whitespace-pre-wrap text-sm text-gray-800 font-mono bg-gray-50 rounded-lg p-4 overflow-x-auto">
+                  {contextContent}
+                </pre>
+              ) : (
+                <div className="text-center py-12">
+                  <FileText className="h-8 w-8 text-gray-300 mx-auto mb-3" />
+                  <p className="text-sm text-gray-500">No context content available</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Click Refresh to generate context for this repository
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
+              <div>
+                {contextContent && (
+                  <button
+                    onClick={handleCopyContext}
+                    className="flex items-center gap-1 px-3 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md"
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy to Clipboard
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedRepo && (
+                  <button
+                    onClick={() => {
+                      setShowContextModal(false);
+                      handleRefresh(selectedRepo);
+                    }}
+                    className="px-3 py-2 text-sm text-blue-600 hover:text-blue-800"
+                  >
+                    <RefreshCw className="h-4 w-4 inline mr-1" />
+                    Refresh Context
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowContextModal(false)}
+                  className="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

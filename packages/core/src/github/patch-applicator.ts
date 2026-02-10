@@ -43,6 +43,10 @@ export interface ApplyPatchesInput {
   baseBranch: string;
 }
 
+export interface ApplyPatchesToBranchInput extends ApplyPatchesInput {
+  branchName?: string;
+}
+
 export interface ApplyPatchesResult {
   success: boolean;
   branchName: string;
@@ -349,6 +353,119 @@ export class PatchApplicator {
         branchName,
         prNumber: pr.number,
         prUrl: pr.url,
+        commitShas
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        branchName,
+        commitShas,
+        error: errorMsg
+      };
+    }
+  }
+
+  /**
+   * Apply a PatchSet to a repository branch without opening a PR.
+   * Used for sandbox validation runs.
+   */
+  async applyPatchesToBranch(input: ApplyPatchesToBranchInput): Promise<ApplyPatchesResult> {
+    const { workflowId, patchSetId, owner, repo } = input;
+
+    const patchSet = await this.prisma.patchSet.findUnique({
+      where: { id: patchSetId },
+      include: { patches: { orderBy: { createdAt: 'asc' } } }
+    });
+
+    if (!patchSet) {
+      return {
+        success: false,
+        branchName: '',
+        commitShas: [],
+        error: `PatchSet ${patchSetId} not found`
+      };
+    }
+
+    const branchName = input.branchName ?? this.generateBranchName(workflowId, patchSetId);
+    const commitShas: string[] = [];
+
+    try {
+      await this.writeGate.createBranch(workflowId, {
+        owner,
+        repo,
+        branch: branchName,
+        sha: patchSet.baseSha
+      });
+
+      for (const patch of patchSet.patches) {
+        const fileChanges = extractFileChangesFromDiff(patch.diff);
+
+        for (const change of fileChanges) {
+          if (change.isDeleted) {
+            try {
+              const currentFile = await this.writeGate.getFileContents(
+                owner,
+                repo,
+                change.path,
+                branchName
+              );
+              const result = await this.writeGate.deleteFile(workflowId, {
+                owner,
+                repo,
+                path: change.path,
+                message: `Delete ${change.path}\n\n${patch.title}`,
+                sha: currentFile.sha,
+                branch: branchName
+              });
+              if (result.commitSha && !commitShas.includes(result.commitSha)) {
+                commitShas.push(result.commitSha);
+              }
+            } catch (err) {
+              // File might not exist, skip
+            }
+            continue;
+          }
+
+          let newContent: string;
+          let fileSha: string | undefined;
+
+          if (change.isNew) {
+            newContent = this.extractNewFileContent(change.diffContent);
+          } else {
+            try {
+              const currentFile = await this.writeGate.getFileContents(
+                owner,
+                repo,
+                change.path,
+                branchName
+              );
+              newContent = applyDiffToContent(currentFile.content, change.diffContent);
+              fileSha = currentFile.sha;
+            } catch (err) {
+              newContent = this.extractNewFileContent(change.diffContent);
+            }
+          }
+
+          const result = await this.writeGate.updateFile(workflowId, {
+            owner,
+            repo,
+            path: change.path,
+            message: `${patch.title}\n\n${patch.summary}`,
+            content: Buffer.from(newContent).toString('base64'),
+            sha: fileSha,
+            branch: branchName
+          });
+
+          if (result.commitSha && !commitShas.includes(result.commitSha)) {
+            commitShas.push(result.commitSha);
+          }
+        }
+      }
+
+      return {
+        success: true,
+        branchName,
         commitShas
       };
     } catch (error) {

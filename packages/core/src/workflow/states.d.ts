@@ -18,7 +18,8 @@ export type StageName =
   | 'feasibility'
   | 'architecture'
   | 'timeline'
-  | 'summary';
+  | 'summary'
+  | 'sandbox';
 
 export type GatedStage =
   | 'feasibility'
@@ -27,6 +28,7 @@ export type GatedStage =
   | 'summary'
   | 'patches'
   | 'policy'
+  | 'sandbox'
   | 'pr'
   | 'done';
 
@@ -45,7 +47,8 @@ export type WorkflowEventType =
   | 'E_PATCH_SET_REJECTED'
   | 'E_STAGE_APPROVED'
   | 'E_STAGE_REJECTED'
-  | 'E_STAGE_CHANGES_REQUESTED';
+  | 'E_STAGE_CHANGES_REQUESTED'
+  | 'E_STAGE_RETRY';
 
 export type TransitionEvent =
   | { type: 'E_WORKFLOW_CREATED' }
@@ -60,7 +63,8 @@ export type TransitionEvent =
   | { type: 'E_PATCH_SET_REJECTED'; reason?: string }
   | { type: 'E_STAGE_APPROVED'; stage: GatedStage; nextStage: GatedStage }
   | { type: 'E_STAGE_REJECTED'; stage: GatedStage; reason?: string }
-  | { type: 'E_STAGE_CHANGES_REQUESTED'; stage: GatedStage; reason: string };
+  | { type: 'E_STAGE_CHANGES_REQUESTED'; stage: GatedStage; reason: string }
+  | { type: 'E_STAGE_RETRY'; stage: GatedStage };
 
 export type EnqueueJob =
   | { queue: 'workflow'; name: 'ingest_context'; payload: { workflowId: string } }
@@ -69,4 +73,5 @@ export type EnqueueJob =
   | { queue: 'workflow'; name: 'feasibility_analysis'; payload: { workflowId: string } }
   | { queue: 'workflow'; name: 'architecture_analysis'; payload: { workflowId: string } }
   | { queue: 'workflow'; name: 'timeline_analysis'; payload: { workflowId: string } }
-  | { queue: 'workflow'; name: 'summary_analysis'; payload: { workflowId: string } };
+  | { queue: 'workflow'; name: 'summary_analysis'; payload: { workflowId: string } }
+  | { queue: 'workflow'; name: 'sandbox_validation'; payload: { workflowId: string; patchSetId: string } };

@@ -304,6 +304,15 @@ export function transition(
     return result('NEEDS_HUMAN', [], `Summary analysis failed: ${event.error}`);
   }
 
+  // Handle sandbox job completion
+  if (event.type === 'E_JOB_COMPLETED' && event.stage === 'sandbox') {
+    return result(current, [], 'Sandbox validation completed, awaiting user approval');
+  }
+
+  if (event.type === 'E_JOB_FAILED' && event.stage === 'sandbox') {
+    return result('NEEDS_HUMAN', [], `Sandbox validation failed: ${event.error}`);
+  }
+
   // Handle patches (ingest_context) job completion - gated pipeline path
   // Note: ingest_context processor emits stage: 'ingest_context', not 'patches'
   // The legacy handler at line ~75 handles INGESTED state; this handles gated pipeline
@@ -339,10 +348,28 @@ export function transition(
       return result(current, jobs, `Stage ${event.stage} approved, enqueueing policy evaluation for ${patchSetIds.length} patch set(s)`);
     }
 
-    // Special handling for policy -> pr transition
-    // PR stage needs apply_patches jobs for each patch set that passed policy
+    // Special handling for policy -> sandbox transition
+    if (event.nextStage === 'sandbox') {
+      const patchSetIds = ctx.patchSetsNeedingApproval?.length
+        ? ctx.patchSetsNeedingApproval
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      if (patchSetIds.length === 0) {
+        return result(current, [], `Stage ${event.stage} approved, no patch sets to validate`);
+      }
+
+      const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+        queue: 'workflow',
+        name: 'sandbox_validation',
+        payload: { workflowId: ctx.workflowId, patchSetId }
+      }));
+      return result(current, jobs, `Stage ${event.stage} approved, enqueueing sandbox validation for ${patchSetIds.length} patch set(s)`);
+    }
+
+    // Special handling for sandbox -> pr transition
     if (event.nextStage === 'pr') {
-      // Use proposed patch sets (they passed policy if we got here)
       const patchSetIds = ctx.patchSetsNeedingApproval?.length
         ? ctx.patchSetsNeedingApproval
         : ctx.latestPatchSetId
@@ -397,8 +424,72 @@ export function transition(
       ], `Changes requested for patches: ${event.reason}, re-generating patches`);
     }
 
+    // Special handling for sandbox stage - re-run validation
+    if (event.stage === 'sandbox') {
+      const patchSetIds = ctx.patchSetsNeedingApproval?.length
+        ? ctx.patchSetsNeedingApproval
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+        queue: 'workflow',
+        name: 'sandbox_validation',
+        payload: { workflowId: ctx.workflowId, patchSetId }
+      }));
+
+      return result(current, jobs, `Changes requested for sandbox: ${event.reason}, re-running validation`);
+    }
+
     const rerunJobs = getJobsForStage(event.stage, ctx.workflowId);
     return result(current, rerunJobs, `Changes requested for ${event.stage}: ${event.reason}`);
+  }
+
+  // E_STAGE_RETRY: Re-run stage from scratch (no feedback, just retry)
+  if (event.type === 'E_STAGE_RETRY') {
+    // Special handling for policy stage - re-evaluate all patch sets
+    if (event.stage === 'policy') {
+      const patchSetIds = ctx.patchSetsNeedingPolicy?.length
+        ? ctx.patchSetsNeedingPolicy
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      if (patchSetIds.length > 0) {
+        const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+          queue: 'workflow',
+          name: 'evaluate_policy',
+          payload: { workflowId: ctx.workflowId, patchSetId }
+        }));
+        return result(current, jobs, `Retrying policy stage, re-evaluating ${patchSetIds.length} patch set(s)`);
+      }
+    }
+
+    // Special handling for patches stage - re-run ingest_context
+    if (event.stage === 'patches') {
+      return result(current, [
+        { queue: 'workflow', name: 'ingest_context', payload: { workflowId: ctx.workflowId } }
+      ], `Retrying patches stage, re-generating patches`);
+    }
+
+    if (event.stage === 'sandbox') {
+      const patchSetIds = ctx.patchSetsNeedingApproval?.length
+        ? ctx.patchSetsNeedingApproval
+        : ctx.latestPatchSetId
+          ? [ctx.latestPatchSetId]
+          : [];
+
+      const jobs: EnqueueJob[] = patchSetIds.map(patchSetId => ({
+        queue: 'workflow',
+        name: 'sandbox_validation',
+        payload: { workflowId: ctx.workflowId, patchSetId }
+      }));
+
+      return result(current, jobs, `Retrying sandbox stage, re-running validation`);
+    }
+
+    const retryJobs = getJobsForStage(event.stage, ctx.workflowId);
+    return result(current, retryJobs, `Retrying ${event.stage} stage`);
   }
 
   // Default: stay in current state (unknown event)
@@ -424,6 +515,9 @@ function getJobsForStage(stage: GatedStage, workflowId: string): EnqueueJob[] {
     case 'policy':
       // Policy evaluation is handled when patches are created
       // No separate job needed at stage transition
+      return [];
+    case 'sandbox':
+      // Sandbox validation is scheduled when policy stage is approved
       return [];
     case 'pr':
       // PR creation is handled when patches are approved

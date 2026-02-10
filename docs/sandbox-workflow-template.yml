@@ -1,0 +1,53 @@
+# .github/workflows/sandbox.yml
+# Minimal CI workflow for ralph sandbox validation
+# Copy this to target repos and customize the test/build steps
+
+name: Sandbox Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflowId:
+        description: 'Ralph workflow ID'
+        required: false
+        type: string
+      patchSetId:
+        description: 'Ralph patchset ID'
+        required: false
+        type: string
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Customize these steps for your project
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck || npm run build
+        continue-on-error: false
+
+      - name: Run tests
+        run: npm test
+        continue-on-error: false
+
+      - name: Build
+        run: npm run build
+        continue-on-error: false
+
+      # Optional: Report back to ralph (future integration)
+      # - name: Report result
+      #   if: always()
+      #   run: |
+      #     echo "Workflow ID: ${{ inputs.workflowId }}"
+      #     echo "PatchSet ID: ${{ inputs.patchSetId }}"
+      #     echo "Status: ${{ job.status }}"

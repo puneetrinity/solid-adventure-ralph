@@ -186,6 +186,12 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ reason }) }
       ),
 
+    retryStage: (id: string, stage: string) =>
+      fetchJson<{ ok: boolean; workflowId: string; stage: string; newStatus: string; error?: string }>(
+        `/api/workflows/${id}/stages/${stage}/retry`,
+        { method: 'POST' }
+      ),
+
     getPatchSets: (id: string) =>
       fetchJson<PatchSet[]>(`/api/workflows/${id}/patch_sets`),
 
@@ -252,11 +258,19 @@ export const api = {
           baseBranch: string;
           baseSha: string | null;
           contextPath: string;
+          content: string | null;
           summary: string | null;
           isStale: boolean;
           updatedAt: string;
         } | null;
       }>(`/api/repos/context${qs({ owner, repo, branch })}`),
+
+    getContextContent: (owner: string, repo: string, branch?: string) =>
+      fetchJson<{
+        content: string | null;
+        contextPath: string | null;
+        summary: string | null;
+      }>(`/api/repos/context/content${qs({ owner, repo, branch })}`),
 
     refreshContext: (owner: string, repo: string, branch?: string, workflowId?: string) =>
       fetchJson<{ ok: boolean; jobId: string; message: string }>(

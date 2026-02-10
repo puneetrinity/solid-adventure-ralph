@@ -31,6 +31,7 @@ export class ReposService {
         baseBranch: context.baseBranch,
         baseSha: context.baseSha,
         contextPath: context.contextPath,
+        content: context.content,
         summary: context.summary,
         isStale: context.isStale,
         updatedAt: context.updatedAt,
@@ -88,5 +89,24 @@ export class ReposService {
     });
 
     return contexts;
+  }
+
+  async getContextContent(repoOwner: string, repoName: string, baseBranch: string = 'main') {
+    const context = await this.prisma.repoContext.findUnique({
+      where: {
+        repoOwner_repoName_baseBranch: { repoOwner, repoName, baseBranch }
+      },
+      select: {
+        content: true,
+        contextPath: true,
+        summary: true,
+      }
+    });
+
+    if (!context) {
+      return { content: null, contextPath: null, summary: null };
+    }
+
+    return context;
   }
 }

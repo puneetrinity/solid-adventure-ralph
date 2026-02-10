@@ -55,4 +55,21 @@ export class ReposController {
   async listContexts(@Query('owner') owner?: string) {
     return this.repos.listContexts(owner);
   }
+
+  @Get('context/content')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Get repo context content', description: 'Get full context content for a repository' })
+  @ApiQuery({ name: 'owner', required: true, description: 'Repository owner' })
+  @ApiQuery({ name: 'repo', required: true, description: 'Repository name' })
+  @ApiQuery({ name: 'branch', required: false, description: 'Base branch (default: main)' })
+  @ApiResponse({ status: 200, description: 'Context content' })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  async getContextContent(
+    @Query('owner') owner: string,
+    @Query('repo') repo: string,
+    @Query('branch') branch?: string
+  ) {
+    return this.repos.getContextContent(owner, repo, branch || 'main');
+  }
 }

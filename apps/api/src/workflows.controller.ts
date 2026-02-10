@@ -141,7 +141,7 @@ export class WorkflowsController {
   @ApiCookieAuth()
   @ApiOperation({ summary: 'Approve stage', description: 'Approve a workflow stage to proceed to the next stage' })
   @ApiParam({ name: 'id', description: 'Workflow ID' })
-  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'] })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'sandbox', 'pr'] })
   @ApiResponse({ status: 200, description: 'Stage approved', type: StageDecisionResponseDto })
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
@@ -159,7 +159,7 @@ export class WorkflowsController {
   @ApiCookieAuth()
   @ApiOperation({ summary: 'Reject stage', description: 'Reject a workflow stage, stopping the workflow' })
   @ApiParam({ name: 'id', description: 'Workflow ID' })
-  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'] })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'sandbox', 'pr'] })
   @ApiResponse({ status: 200, description: 'Stage rejected', type: StageDecisionResponseDto })
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
@@ -177,7 +177,7 @@ export class WorkflowsController {
   @ApiCookieAuth()
   @ApiOperation({ summary: 'Request changes', description: 'Request changes to a stage, triggering a re-run with feedback' })
   @ApiParam({ name: 'id', description: 'Workflow ID' })
-  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'patches', 'policy', 'pr'] })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'sandbox', 'pr'] })
   @ApiResponse({ status: 200, description: 'Changes requested', type: StageDecisionResponseDto })
   @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
   @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
@@ -188,6 +188,23 @@ export class WorkflowsController {
     @Req() req: AuthenticatedRequest
   ) {
     return this.workflows.requestStageChanges(id, stage, body?.reason || '', req.user.id, req.user.username);
+  }
+
+  @Post(':id/stages/:stage/retry')
+  @UseGuards(AuthGuard)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Retry stage', description: 'Retry a workflow stage from scratch' })
+  @ApiParam({ name: 'id', description: 'Workflow ID' })
+  @ApiParam({ name: 'stage', description: 'Stage name', enum: ['feasibility', 'architecture', 'timeline', 'summary', 'patches', 'policy', 'sandbox', 'pr'] })
+  @ApiResponse({ status: 200, description: 'Stage retry initiated', type: StageDecisionResponseDto })
+  @ApiResponse({ status: 401, description: 'Not authenticated', type: ErrorResponseDto })
+  @ApiResponse({ status: 404, description: 'Workflow not found', type: ErrorResponseDto })
+  async retryStage(
+    @Param('id') id: string,
+    @Param('stage') stage: string,
+    @Req() req: AuthenticatedRequest
+  ) {
+    return this.workflows.retryStage(id, stage, req.user.id, req.user.username);
   }
 
   @Delete(':id')
