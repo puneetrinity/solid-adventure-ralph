@@ -142,6 +142,7 @@ export class AnthropicLLMProvider implements LLMProvider {
 
   private calculateUsage(anthropicUsage: AnthropicResponse['usage']): TokenUsage {
     const pricing = ANTHROPIC_PRICING[this.modelId] ?? { input: 300, output: 1500 };
+    // Pricing is in cents per 1M tokens, so result is already in cents
     const inputCost = (anthropicUsage.input_tokens / 1_000_000) * pricing.input;
     const outputCost = (anthropicUsage.output_tokens / 1_000_000) * pricing.output;
 
@@ -149,7 +150,7 @@ export class AnthropicLLMProvider implements LLMProvider {
       inputTokens: anthropicUsage.input_tokens,
       outputTokens: anthropicUsage.output_tokens,
       totalTokens: anthropicUsage.input_tokens + anthropicUsage.output_tokens,
-      estimatedCost: Math.ceil((inputCost + outputCost) * 100), // Convert to cents
+      estimatedCost: Math.ceil(inputCost + outputCost),
     };
   }
 }

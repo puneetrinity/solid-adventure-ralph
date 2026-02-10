@@ -141,7 +141,7 @@ export class OpenAILLMProvider implements LLMProvider {
       inputTokens: openaiUsage.prompt_tokens,
       outputTokens: openaiUsage.completion_tokens,
       totalTokens: openaiUsage.total_tokens,
-      estimatedCost: Math.ceil((inputCost + outputCost) * 100), // Convert to cents
+      estimatedCost: Math.ceil(inputCost + outputCost), // Pricing is in cents per 1M tokens
     };
   }
 }

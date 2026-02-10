@@ -141,7 +141,7 @@ export class GroqLLMProvider implements LLMProvider {
       inputTokens: groqUsage.prompt_tokens,
       outputTokens: groqUsage.completion_tokens,
       totalTokens: groqUsage.total_tokens,
-      estimatedCost: Math.ceil((inputCost + outputCost) * 100), // Convert to cents
+      estimatedCost: Math.ceil(inputCost + outputCost), // Pricing is in cents per 1M tokens
     };
   }
 }
