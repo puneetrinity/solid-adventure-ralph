@@ -107,6 +107,35 @@ export class SandboxValidationProcessor extends WorkerHost {
       throw new Error(`Workflow ${workflowId} missing repository configuration`);
     }
 
+    // Skip sandbox validation in test/CI environments
+    if (process.env.SKIP_SANDBOX_VALIDATION === 'true') {
+      this.logger.log(`Skipping sandbox validation for ${repoOwner}/${repoName} (SKIP_SANDBOX_VALIDATION=true)`);
+
+      await this.prisma.workflow.update({
+        where: { id: workflowId },
+        data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+      });
+
+      await this.prisma.workflowEvent.create({
+        data: {
+          workflowId,
+          type: 'worker.sandbox.skipped',
+          payload: { patchSetId, reason: 'SKIP_SANDBOX_VALIDATION=true' }
+        }
+      });
+
+      await this.orchestrateQueue.add('orchestrate', {
+        workflowId,
+        event: {
+          type: 'E_JOB_COMPLETED',
+          stage: 'sandbox',
+          result: { status: 'pass', conclusion: 'skipped' }
+        }
+      });
+
+      return { ok: true, status: 'pass', conclusion: 'skipped' };
+    }
+
     const sandboxWorkflowId = process.env.SANDBOX_WORKFLOW_ID || process.env.SANDBOX_WORKFLOW_FILE;
     if (!sandboxWorkflowId) {
       throw new Error('SANDBOX_WORKFLOW_ID not set');

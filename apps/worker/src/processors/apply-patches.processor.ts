@@ -70,6 +70,40 @@ export class ApplyPatchesProcessor extends WorkerHost {
       throw new Error(`Workflow ${workflowId} missing repository configuration`);
     }
 
+    // Skip PR creation in test/CI environments
+    if (process.env.SKIP_PR_CREATION === 'true') {
+      this.logger.log(`Skipping PR creation for ${repoOwner}/${repoName} (SKIP_PR_CREATION=true)`);
+
+      await this.prisma.patchSet.update({
+        where: { id: patchSetId },
+        data: { status: 'applied' }
+      });
+
+      await this.prisma.workflow.update({
+        where: { id: workflowId },
+        data: { stageStatus: 'ready', stageUpdatedAt: new Date() }
+      });
+
+      await this.prisma.workflowEvent.create({
+        data: {
+          workflowId,
+          type: 'worker.apply_patches.skipped',
+          payload: { patchSetId, reason: 'SKIP_PR_CREATION=true' }
+        }
+      });
+
+      await this.orchestrateQueue.add('orchestrate', {
+        workflowId,
+        event: {
+          type: 'E_JOB_COMPLETED',
+          stage: 'apply_patches',
+          result: { prNumber: 0, prUrl: 'skipped' }
+        }
+      });
+
+      return { ok: true, prNumber: 0, prUrl: 'skipped' };
+    }
+
     this.logger.log(`Applying patches for ${repoOwner}/${repoName}`);
 
     // Record run start

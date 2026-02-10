@@ -149,6 +149,8 @@ jobs:
           GITHUB_TOKEN: ''
           ALLOW_SUMMARY_FALLBACK: 'true'
           ALLOW_PATCH_FALLBACK: 'true'
+          SKIP_SANDBOX_VALIDATION: 'true'
+          SKIP_PR_CREATION: 'true'
         run: npm --workspace apps/worker run start &
 
       - name: Run Integration Tests
