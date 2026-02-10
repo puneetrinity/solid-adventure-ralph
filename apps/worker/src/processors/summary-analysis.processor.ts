@@ -9,6 +9,7 @@ import {
   LLMRunner,
   createProviderWithFallback,
   SummaryAnalysisSchema,
+  type SummaryAnalysis,
   safeParseLLMResponse,
   buildRetryPrompt,
   SCHEMA_DESCRIPTIONS,
@@ -127,7 +128,7 @@ export class SummaryAnalysisProcessor extends WorkerHost {
       ].filter(Boolean) as string[];
 
       const llmProvider = createProviderWithFallback('summary');
-      let artifact: SummaryArtifact;
+      let artifact: SummaryArtifact | null = null;
 
       this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for summary analysis`);
       const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
@@ -182,11 +183,28 @@ export class SummaryAnalysisProcessor extends WorkerHost {
         }
 
         const allowFallback = process.env.ALLOW_SUMMARY_FALLBACK === 'true';
-        let parsedResult = safeParseLLMResponse(response.rawContent, SummaryAnalysisSchema);
-        if (!parsedResult.success) {
+        const firstResult = safeParseLLMResponse(response.rawContent, SummaryAnalysisSchema);
+
+        type RequiredSummary = Required<SummaryAnalysis>;
+        let parsedData: RequiredSummary | null = null;
+
+        if (firstResult.success) {
+          const d = firstResult.data;
+          parsedData = {
+            ...d,
+            scope: d.scope ?? [],
+            risks: d.risks ?? [],
+            tests: d.tests ?? [],
+            dependencies: d.dependencies ?? [],
+            pros: d.pros ?? [],
+            cons: d.cons ?? [],
+            links: d.links ?? []
+          };
+        } else {
+          // Retry with refined prompt
           const retryPrompt = buildRetryPrompt(
             response.rawContent,
-            parsedResult,
+            firstResult,
             SCHEMA_DESCRIPTIONS.summary
           );
 
@@ -199,59 +217,70 @@ export class SummaryAnalysisProcessor extends WorkerHost {
             throw new Error(`LLM retry failed: ${retry.error}`);
           }
 
-          parsedResult = safeParseLLMResponse(retry.rawContent, SummaryAnalysisSchema);
-          if (!parsedResult.success) {
-            if (allowFallback) {
-              this.logger.warn(`Failed to parse summary analysis, using fallback: ${parsedResult.error}`);
-              artifact = {
-                kind: 'SummaryV1',
-                overview: timelineData.summary || architectureData.overview || 'Summary unavailable',
-                scope: [],
-                risks: [],
-                tests: [],
-                dependencies: [],
-                pros: [],
-                cons: [],
-                links: artifactLinks,
-                recommendation: 'hold',
-                inputs: {
-                  featureGoal: workflow.featureGoal || workflow.goal || '',
-                  businessJustification: workflow.businessJustification || '',
-                  feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
-                  architectureOverview: architectureData.overview || '',
-                  timelineSummary: timelineData.summary || ''
-                }
-              };
-            } else {
-              throw new Error(`Failed to parse summary analysis: ${parsedResult.error}`);
-            }
+          const retryResult = safeParseLLMResponse(retry.rawContent, SummaryAnalysisSchema);
+          if (retryResult.success) {
+            const d = retryResult.data;
+            parsedData = {
+              ...d,
+              scope: d.scope ?? [],
+              risks: d.risks ?? [],
+              tests: d.tests ?? [],
+              dependencies: d.dependencies ?? [],
+              pros: d.pros ?? [],
+              cons: d.cons ?? [],
+              links: d.links ?? []
+            };
+          } else if (allowFallback) {
+            this.logger.warn(`Failed to parse summary analysis, using fallback: ${retryResult.error}`);
+            artifact = {
+              kind: 'SummaryV1',
+              overview: timelineData.summary || architectureData.overview || 'Summary unavailable',
+              scope: [],
+              risks: [],
+              tests: [],
+              dependencies: [],
+              pros: [],
+              cons: [],
+              links: artifactLinks,
+              recommendation: 'hold',
+              inputs: {
+                featureGoal: workflow.featureGoal || workflow.goal || '',
+                businessJustification: workflow.businessJustification || '',
+                feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
+                architectureOverview: architectureData.overview || '',
+                timelineSummary: timelineData.summary || ''
+              }
+            };
+          } else {
+            throw new Error(`Failed to parse summary analysis: ${retryResult.error}`);
           }
         }
 
-        if (!artifact) {
-          const parsed = parsedResult.data;
-          artifact = {
-            kind: 'SummaryV1',
-            overview: parsed.overview,
-            scope: parsed.scope || [],
-            risks: parsed.risks || [],
-            tests: parsed.tests || [],
-            dependencies: parsed.dependencies || [],
-            pros: parsed.pros || [],
-            cons: parsed.cons || [],
-            links: parsed.links || [],
-            recommendation: parsed.recommendation,
-            inputs: {
-              featureGoal: workflow.featureGoal || workflow.goal || '',
-              businessJustification: workflow.businessJustification || '',
-              feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
-              architectureOverview: architectureData.overview || '',
-              timelineSummary: timelineData.summary || ''
-            }
-          };
+        const resolvedArtifact: SummaryArtifact | null = artifact ?? (parsedData ? {
+          kind: 'SummaryV1',
+          overview: parsedData.overview,
+          scope: parsedData.scope || [],
+          risks: parsedData.risks || [],
+          tests: parsedData.tests || [],
+          dependencies: parsedData.dependencies || [],
+          pros: parsedData.pros || [],
+          cons: parsedData.cons || [],
+          links: parsedData.links || [],
+          recommendation: parsedData.recommendation,
+          inputs: {
+            featureGoal: workflow.featureGoal || workflow.goal || '',
+            businessJustification: workflow.businessJustification || '',
+            feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
+            architectureOverview: architectureData.overview || '',
+            timelineSummary: timelineData.summary || ''
+          }
+        } : null);
+
+        if (!resolvedArtifact) {
+          throw new Error('Summary artifact was not created');
         }
 
-      const artifactContent = JSON.stringify(artifact, null, 2);
+      const artifactContent = JSON.stringify(resolvedArtifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');
 
       const existingArtifact = await this.prisma.artifact.findFirst({
@@ -280,13 +309,13 @@ export class SummaryAnalysisProcessor extends WorkerHost {
         data: {
           workflowId,
           type: 'worker.summary.completed',
-          payload: { recommendation: artifact.recommendation }
+          payload: { recommendation: resolvedArtifact.recommendation }
         }
       });
 
       await this.runRecorder.completeRun({
         runId,
-        outputs: { recommendation: artifact.recommendation }
+        outputs: { recommendation: resolvedArtifact.recommendation }
       });
 
       await this.orchestrateQueue.add('orchestrate', {
@@ -294,11 +323,11 @@ export class SummaryAnalysisProcessor extends WorkerHost {
         event: {
           type: 'E_JOB_COMPLETED',
           stage: 'summary',
-          result: { recommendation: artifact.recommendation }
+          result: { recommendation: resolvedArtifact.recommendation }
         }
       });
 
-      return { ok: true, recommendation: artifact.recommendation };
+      return { ok: true, recommendation: resolvedArtifact.recommendation };
     } catch (error: any) {
       this.logger.error(`Summary analysis failed: ${error?.message ?? error}`);
 
