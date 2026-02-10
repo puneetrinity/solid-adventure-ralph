@@ -168,6 +168,7 @@ jobs:
       - name: Run E2E Tests
         env:
           E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+          E2E_AUTH_BYPASS_TOKEN: ${{ secrets.E2E_AUTH_BYPASS_TOKEN }}
         run: npm run test:e2e
 
   build:

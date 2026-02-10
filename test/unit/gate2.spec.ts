@@ -243,8 +243,8 @@ describe('Gate2 transition integration', () => {
   describe('PATCHES_PROPOSED state', () => {
     test('enqueues policy evaluation when patchsets exist', () => {
       const ctx = baseCtx();
-      // Trigger with any event to normalize state
-      const res = transition('PATCHES_PROPOSED', { type: 'E_WORKFLOW_CREATED' }, ctx);
+      // Use E_JOB_COMPLETED for ingest_context to trigger policy evaluation
+      const res = transition('PATCHES_PROPOSED', { type: 'E_JOB_COMPLETED', stage: 'ingest_context' }, ctx);
       expect(res.nextState).toBe('PATCHES_PROPOSED');
       expect(res.enqueue).toEqual([
         { queue: 'workflow', name: 'evaluate_policy', payload: { workflowId: 'w1', patchSetId: 'ps1' } }
