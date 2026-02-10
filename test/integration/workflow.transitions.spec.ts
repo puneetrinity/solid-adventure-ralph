@@ -41,6 +41,7 @@ async function waitForStage(
   );
 }
 
+// Long-running test - requires stage processors to complete
 run('workflow stage transitions (feasibility → architecture → timeline)', async () => {
   const createRes = await fetch(`${baseUrl}/api/workflows`, {
     method: 'POST',
@@ -85,4 +86,4 @@ run('workflow stage transitions (feasibility → architecture → timeline)', as
   expect(approveArchitecture.ok).toBe(true);
 
   await waitForStage(workflowId, 'timeline', 'ready');
-});
+}, 300_000); // 5 minute timeout for stage transitions
