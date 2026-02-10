@@ -153,7 +153,7 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
 
         const response = await llmRunner.run('architect', prompt, {
           context: { workflowId },
-          budget: { maxInputTokens: 50000, maxOutputTokens: 2000, maxTotalCost: 50 }
+          budget: { maxInputTokens: 50000, maxOutputTokens: 2000, maxTotalCost: 500 }
         });
 
         if (response.success && response.rawContent) {

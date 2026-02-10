@@ -93,7 +93,7 @@ ${content}`;
 
           try {
             const response = await llmRunner.run('documenter', prompt, {
-              budget: { maxInputTokens: 50000, maxOutputTokens: 1000, maxTotalCost: 50 },
+              budget: { maxInputTokens: 50000, maxOutputTokens: 1000, maxTotalCost: 500 },
             });
 
             if (response.success && response.rawContent) {
@@ -174,7 +174,7 @@ Generate a comprehensive PROJECT_CONTEXT.md that includes:
 Format it as a proper markdown document. Be specific and accurate based on the files analyzed.`;
 
           const response = await llmRunner.run('documenter', generatePrompt, {
-            budget: { maxInputTokens: 100000, maxOutputTokens: 4000, maxTotalCost: 100 },
+            budget: { maxInputTokens: 100000, maxOutputTokens: 4000, maxTotalCost: 1000 },
           });
 
           if (response.success && response.rawContent) {
@@ -186,7 +186,7 @@ Format it as a proper markdown document. Be specific and accurate based on the f
             const summaryPrompt = `Summarize this project context in 2-3 sentences:\n\n${content.slice(0, 3000)}`;
             try {
               const summaryResponse = await llmRunner.run('documenter', summaryPrompt, {
-                budget: { maxInputTokens: 10000, maxOutputTokens: 500, maxTotalCost: 10 },
+                budget: { maxInputTokens: 10000, maxOutputTokens: 500, maxTotalCost: 200 },
               });
               if (summaryResponse.success && summaryResponse.rawContent) {
                 summary = summaryResponse.rawContent;

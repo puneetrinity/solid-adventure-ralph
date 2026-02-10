@@ -11,6 +11,9 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
 // Anthropic pricing (in cents per 1M tokens)
 const ANTHROPIC_PRICING: Record<string, { input: number; output: number }> = {
+  'claude-opus-4-6': { input: 500, output: 2500 },
+  'claude-opus-4-5-20250514': { input: 500, output: 2500 },
+  'claude-sonnet-4-20250514': { input: 300, output: 1500 },
   'claude-3-5-sonnet-20241022': { input: 300, output: 1500 },
   'claude-3-5-haiku-20241022': { input: 100, output: 500 },
   'claude-3-opus-20240229': { input: 1500, output: 7500 },

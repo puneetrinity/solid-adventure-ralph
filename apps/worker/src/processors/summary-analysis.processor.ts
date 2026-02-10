@@ -174,13 +174,14 @@ export class SummaryAnalysisProcessor extends WorkerHost {
 
         const response = await llmRunner.run('architect', prompt, {
           context: { workflowId },
-          budget: { maxInputTokens: 50000, maxOutputTokens: 2000, maxTotalCost: 50 }
+          budget: { maxInputTokens: 50000, maxOutputTokens: 2000, maxTotalCost: 500 }
         });
 
         if (!response.success || !response.rawContent) {
           throw new Error(`LLM call failed: ${response.error}`);
         }
 
+        const allowFallback = process.env.ALLOW_SUMMARY_FALLBACK === 'true';
         let parsedResult = safeParseLLMResponse(response.rawContent, SummaryAnalysisSchema);
         if (!parsedResult.success) {
           const retryPrompt = buildRetryPrompt(
@@ -191,7 +192,7 @@ export class SummaryAnalysisProcessor extends WorkerHost {
 
           const retry = await llmRunner.run('architect', retryPrompt, {
             context: { workflowId },
-            budget: { maxInputTokens: 20000, maxOutputTokens: 1500, maxTotalCost: 25 }
+            budget: { maxInputTokens: 20000, maxOutputTokens: 1500, maxTotalCost: 300 }
           });
 
           if (!retry.success || !retry.rawContent) {
@@ -200,30 +201,55 @@ export class SummaryAnalysisProcessor extends WorkerHost {
 
           parsedResult = safeParseLLMResponse(retry.rawContent, SummaryAnalysisSchema);
           if (!parsedResult.success) {
-            throw new Error(`Failed to parse summary analysis: ${parsedResult.error}`);
+            if (allowFallback) {
+              this.logger.warn(`Failed to parse summary analysis, using fallback: ${parsedResult.error}`);
+              artifact = {
+                kind: 'SummaryV1',
+                overview: timelineData.summary || architectureData.overview || 'Summary unavailable',
+                scope: [],
+                risks: [],
+                tests: [],
+                dependencies: [],
+                pros: [],
+                cons: [],
+                links: artifactLinks,
+                recommendation: 'hold',
+                inputs: {
+                  featureGoal: workflow.featureGoal || workflow.goal || '',
+                  businessJustification: workflow.businessJustification || '',
+                  feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
+                  architectureOverview: architectureData.overview || '',
+                  timelineSummary: timelineData.summary || ''
+                }
+              };
+            } else {
+              throw new Error(`Failed to parse summary analysis: ${parsedResult.error}`);
+            }
           }
         }
 
-        const parsed = parsedResult.data;
-        artifact = {
-          kind: 'SummaryV1',
-          overview: parsed.overview,
-          scope: parsed.scope || [],
-          risks: parsed.risks || [],
-          tests: parsed.tests || [],
-          dependencies: parsed.dependencies || [],
-          pros: parsed.pros || [],
-          cons: parsed.cons || [],
-          links: parsed.links || [],
-          recommendation: parsed.recommendation,
-          inputs: {
-            featureGoal: workflow.featureGoal || workflow.goal || '',
-            businessJustification: workflow.businessJustification || '',
-            feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
-            architectureOverview: architectureData.overview || '',
-            timelineSummary: timelineData.summary || ''
-          }
-        };
+        if (!artifact) {
+          const parsed = parsedResult.data;
+          artifact = {
+            kind: 'SummaryV1',
+            overview: parsed.overview,
+            scope: parsed.scope || [],
+            risks: parsed.risks || [],
+            tests: parsed.tests || [],
+            dependencies: parsed.dependencies || [],
+            pros: parsed.pros || [],
+            cons: parsed.cons || [],
+            links: parsed.links || [],
+            recommendation: parsed.recommendation,
+            inputs: {
+              featureGoal: workflow.featureGoal || workflow.goal || '',
+              businessJustification: workflow.businessJustification || '',
+              feasibilityRecommendation: feasibilityData.recommendation || 'unknown',
+              architectureOverview: architectureData.overview || '',
+              timelineSummary: timelineData.summary || ''
+            }
+          };
+        }
 
       const artifactContent = JSON.stringify(artifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');
