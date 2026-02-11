@@ -534,14 +534,22 @@ export class IngestContextProcessor extends WorkerHost {
       if (response.success && response.rawContent) {
         const parseResult = await this.parseOrRetryLLMResponse(response.rawContent, llmRunner, workflowId, repoOwner, repoName);
         if ('error' in parseResult) {
-          throw new Error(`Patch generation failed for ${repoOwner}/${repoName}:\n${parseResult.error}`);
+          // If ALLOW_PATCH_FALLBACK is set, log warning and continue (will use stub patch)
+          const allowFallback = process.env.ALLOW_PATCH_FALLBACK === 'true';
+          if (allowFallback) {
+            this.logger.warn(`Patch validation failed for ${repoOwner}/${repoName}: ${parseResult.error}`);
+            this.logger.warn(`ALLOW_PATCH_FALLBACK is enabled, will use stub patch`);
+          } else {
+            throw new Error(`Patch generation failed for ${repoOwner}/${repoName}:\n${parseResult.error}`);
+          }
         }
 
-        const parsed = parseResult.parsed;
-        patchTitle = parsed.title || patchTitle;
-        patchSummary = parsed.summary || patchSummary;
+        const parsed = 'parsed' in parseResult ? parseResult.parsed : null;
+        if (parsed) {
+          patchTitle = parsed.title || patchTitle;
+          patchSummary = parsed.summary || patchSummary;
 
-        if (parsed.files && parsed.files.length > 0) {
+          if (parsed.files && parsed.files.length > 0) {
           const diffs: string[] = [];
           const replaceErrors: string[] = [];
 
@@ -705,12 +713,17 @@ export class IngestContextProcessor extends WorkerHost {
             this.logger.warn(`Replace action errors: ${replaceErrors.join('; ')}`);
           }
 
-          if (diffs.length > 0) {
-            patchDiff = diffs.join('\n\n');
-            this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
-          } else if (replaceErrors.length > 0) {
-            // If all changes failed due to replace errors, throw with details
-            throw new Error(`All file changes failed: ${replaceErrors.join('; ')}`);
+            if (diffs.length > 0) {
+              patchDiff = diffs.join('\n\n');
+              this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
+            } else if (replaceErrors.length > 0) {
+              // If all changes failed due to replace errors, don't throw if fallback is allowed
+              const allowFallback = process.env.ALLOW_PATCH_FALLBACK === 'true';
+              if (!allowFallback) {
+                throw new Error(`All file changes failed: ${replaceErrors.join('; ')}`);
+              }
+              this.logger.warn(`All file changes failed, will use fallback: ${replaceErrors.join('; ')}`);
+            }
           }
         }
       } else {

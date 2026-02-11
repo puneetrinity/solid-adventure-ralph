@@ -1,3 +1,5 @@
+export {}; // Make this a module to avoid TS variable redeclaration errors
+
 const baseUrl = process.env.API_BASE_URL;
 const bypassToken = process.env.INTEGRATION_AUTH_BYPASS_TOKEN || process.env.AUTH_BYPASS_TOKEN;
 

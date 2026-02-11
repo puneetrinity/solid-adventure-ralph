@@ -1,3 +1,5 @@
+export {}; // Make this a module to avoid TS variable redeclaration errors
+
 const baseUrl = process.env.API_BASE_URL;
 const healthPath = process.env.API_HEALTH_PATH || '/api/health';
 
