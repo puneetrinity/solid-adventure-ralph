@@ -267,10 +267,68 @@ export function extractJson(raw: string): string | null {
 }
 
 /**
- * Sanitize JSON string by removing control characters.
+ * Sanitize JSON string by removing control characters and escaping
+ * literal newlines/tabs inside string values.
  */
 export function sanitizeJson(input: string): string {
-  return input.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+  // Remove control characters (except newlines/tabs which we handle separately)
+  let result = input.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+
+  // Escape literal newlines, carriage returns, and tabs inside JSON strings
+  // This handles the common LLM issue of generating multi-line strings
+  result = escapeNewlinesInJsonStrings(result);
+
+  return result;
+}
+
+/**
+ * Escape literal newlines, carriage returns, and tabs inside JSON string values.
+ * This fixes malformed JSON from LLMs that output multi-line strings.
+ */
+function escapeNewlinesInJsonStrings(json: string): string {
+  const result: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i];
+
+    if (escaped) {
+      // Previous char was backslash, this is an escaped character
+      result.push(char);
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      result.push(char);
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      result.push(char);
+      continue;
+    }
+
+    if (inString) {
+      // Inside a string - escape problematic characters
+      if (char === '\n') {
+        result.push('\\n');
+      } else if (char === '\r') {
+        result.push('\\r');
+      } else if (char === '\t') {
+        result.push('\\t');
+      } else {
+        result.push(char);
+      }
+    } else {
+      result.push(char);
+    }
+  }
+
+  return result.join('');
 }
 
 /**
