@@ -15,6 +15,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { WriteGate } from '../policy/write-gate';
 import { parseDiff, type DiffFile } from '../policy/diff-parser';
+import { validateDiffContext } from './diff-generator';
 
 // ============================================================================
 // Types
@@ -68,9 +69,55 @@ export interface FileChange {
 // Diff Application Logic
 // ============================================================================
 
+export interface ApplyDiffResult {
+  success: boolean;
+  content?: string;
+  error?: string;
+  validationErrors?: string[];
+}
+
+/**
+ * Validate and apply a unified diff to existing content.
+ * Validates context lines match before applying.
+ * Returns error details if validation fails.
+ */
+export function validateAndApplyDiff(
+  originalContent: string,
+  diff: string,
+  options?: { skipValidation?: boolean }
+): ApplyDiffResult {
+  if (!diff.trim()) {
+    return { success: true, content: originalContent };
+  }
+
+  // Validate context lines match unless explicitly skipped
+  if (!options?.skipValidation) {
+    const validation = validateDiffContext(originalContent, diff);
+    if (!validation.valid) {
+      return {
+        success: false,
+        error: `Diff validation failed: context lines do not match current file content`,
+        validationErrors: validation.errors
+      };
+    }
+  }
+
+  // Apply the diff
+  try {
+    const result = applyDiffToContent(originalContent, diff);
+    return { success: true, content: result };
+  } catch (err) {
+    return {
+      success: false,
+      error: `Failed to apply diff: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+}
+
 /**
  * Apply a unified diff to existing content.
  * Processes hunks sequentially, tracking line position in original file.
+ * NOTE: Use validateAndApplyDiff() for safer application with validation.
  */
 export function applyDiffToContent(originalContent: string, diff: string): string {
   if (!diff.trim()) {
@@ -286,7 +333,7 @@ export class PatchApplicator {
             // New file - extract content from diff
             newContent = this.extractNewFileContent(change.diffContent);
           } else {
-            // Modified file - get current content and apply diff
+            // Modified file - get current content and apply diff with validation
             try {
               const currentFile = await this.writeGate.getFileContents(
                 owner,
@@ -294,7 +341,24 @@ export class PatchApplicator {
                 change.path,
                 branchName
               );
-              newContent = applyDiffToContent(currentFile.content, change.diffContent);
+
+              // Validate and apply diff
+              const applyResult = validateAndApplyDiff(currentFile.content, change.diffContent);
+              if (!applyResult.success) {
+                // Validation failed - return early with error
+                return {
+                  success: false,
+                  branchName,
+                  commitShas,
+                  error: `Failed to apply diff to ${change.path}: ${applyResult.error}${
+                    applyResult.validationErrors
+                      ? `\nValidation errors:\n${applyResult.validationErrors.join('\n')}`
+                      : ''
+                  }`
+                };
+              }
+
+              newContent = applyResult.content!;
               fileSha = currentFile.sha;
             } catch (err) {
               // File might not exist yet on branch, treat as new
@@ -440,7 +504,24 @@ export class PatchApplicator {
                 change.path,
                 branchName
               );
-              newContent = applyDiffToContent(currentFile.content, change.diffContent);
+
+              // Validate and apply diff
+              const applyResult = validateAndApplyDiff(currentFile.content, change.diffContent);
+              if (!applyResult.success) {
+                // Validation failed - return early with error
+                return {
+                  success: false,
+                  branchName,
+                  commitShas,
+                  error: `Failed to apply diff to ${change.path}: ${applyResult.error}${
+                    applyResult.validationErrors
+                      ? `\nValidation errors:\n${applyResult.validationErrors.join('\n')}`
+                      : ''
+                  }`
+                };
+              }
+
+              newContent = applyResult.content!;
               fileSha = currentFile.sha;
             } catch (err) {
               newContent = this.extractNewFileContent(change.diffContent);

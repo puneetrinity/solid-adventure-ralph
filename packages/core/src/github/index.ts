@@ -1,6 +1,7 @@
 // Re-export interface and stub (safe for unit tests)
 export * from './github-client';
 export * from './patch-applicator';
+export * from './diff-generator';
 export * from './webhook';
 export * from './webhook-service';
 

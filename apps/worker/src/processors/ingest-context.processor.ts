@@ -13,6 +13,8 @@ import {
   safeParseLLMResponse,
   SCHEMA_DESCRIPTIONS,
   buildRetryPrompt,
+  generateUnifiedDiff,
+  generateReplaceActionDiff,
 } from '@arch-orchestrator/core';
 import { GITHUB_CLIENT_TOKEN } from '../constants';
 
@@ -40,8 +42,11 @@ interface RepoContext {
 
 interface FileChange {
   path: string;
-  action: 'create' | 'modify' | 'delete';
-  content?: string; // Required for create/modify, not needed for delete
+  action: 'create' | 'modify' | 'delete' | 'replace';
+  content?: string; // Required for create/modify, not needed for delete/replace
+  find?: string; // Required for replace action
+  replace?: string; // Required for replace action
+  rationale?: string; // Required for modify action
   summary?: string;
 }
 
@@ -396,6 +401,10 @@ export class IngestContextProcessor extends WorkerHost {
     let files: Array<{ path: string; additions: number; deletions: number }> = [];
     let addsTests = false;
 
+    if (process.env.NODE_ENV === 'test' && workflow.context?.includes('[FORCE_PATCH_ERROR]')) {
+      throw new Error(`Forced patch validation error for ${repoOwner}/${repoName}`);
+    }
+
     this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) to generate patch for ${repoOwner}/${repoName}...`);
     const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
@@ -460,34 +469,60 @@ export class IngestContextProcessor extends WorkerHost {
 
       promptParts.push(
         `## Instructions`,
-        `Based on the goal and context, determine which files need to be created, modified, or deleted.`,
-        `You may modify existing files, create new ones, or delete files. Include test files if appropriate.`,
+        `Based on the goal and context, determine which files need to be changed.`,
+        ``,
+        `IMPORTANT: Prefer "replace" action for existing files. Only use "modify" for major refactors (>50% of file).`,
         ``,
         `Respond with ONLY a JSON object (no markdown code blocks, no explanation):`,
         `{`,
         `  "title": "Short title for the change (max 50 chars)",`,
         `  "summary": "Brief description of what this change does",`,
         `  "files": [`,
+        `    // PREFERRED: For surgical edits to existing files`,
         `    {`,
         `      "path": "relative/path/to/file.ts",`,
-        `      "action": "create" | "modify" | "delete",`,
-        `      "content": "complete new file content (not needed for delete)"`,
+        `      "action": "replace",`,
+        `      "find": "exact string to find (must match exactly once in file)",`,
+        `      "replace": "string to replace it with"`,
+        `    },`,
+        `    // For creating new files only`,
+        `    {`,
+        `      "path": "relative/path/to/new-file.ts",`,
+        `      "action": "create",`,
+        `      "content": "complete file content"`,
+        `    },`,
+        `    // DISCOURAGED: Only for large refactors (>50% of file)`,
+        `    {`,
+        `      "path": "relative/path/to/file.ts",`,
+        `      "action": "modify",`,
+        `      "content": "complete new file content (max 200 lines)",`,
+        `      "rationale": "Why replace action cannot be used"`,
+        `    },`,
+        `    // For deleting files`,
+        `    {`,
+        `      "path": "relative/path/to/file.ts",`,
+        `      "action": "delete"`,
         `    }`,
         `  ]`,
         `}`,
         ``,
-        `Important:`,
+        `Critical Rules:`,
         `- Return valid JSON only (no markdown fences, no commentary)`,
         `- Escape newlines in JSON strings as \\n`,
-        `- Do not include unescaped quotes or control characters`,
-        `- Always include a non-empty "files" array`,
-        `- Max 5 files; choose the most critical changes`,
+        `- Max 5 files per patch`,
         `- Use only paths from the repository file structure above`,
-        `- For "modify" action, provide the complete new content (not a diff)`,
-        `- For "create" action, provide the full file content`,
-        `- For "delete" action, content is not needed`,
-        `- Keep changes focused and minimal`,
-        `- Include any necessary imports`
+        ``,
+        `Action Guidelines:`,
+        `- "replace": PREFERRED. The "find" string must match EXACTLY ONCE in the file. Include enough context to be unique.`,
+        `- "create": For new files only. Provide complete file content.`,
+        `- "modify": DISCOURAGED. Only use when replacing >50% of a file. Requires "rationale" explaining why "replace" won't work. Max 200 lines.`,
+        `- "delete": For removing files.`,
+        ``,
+        `Quality Rules:`,
+        `- Make minimal, focused changes`,
+        `- Include necessary imports in replace/modify content`,
+        `- Preserve existing code style`,
+        `- Do not rewrite entire files unless absolutely necessary`
       );
 
       const prompt = promptParts.join('\n');
@@ -497,74 +532,167 @@ export class IngestContextProcessor extends WorkerHost {
       });
 
       if (response.success && response.rawContent) {
-        const parsed = await this.parseOrRetryLLMResponse(response.rawContent, llmRunner, workflowId, repoOwner, repoName);
-        if (!parsed) {
-          throw new Error(`LLM response invalid after retry for ${repoOwner}/${repoName}`);
+        const parseResult = await this.parseOrRetryLLMResponse(response.rawContent, llmRunner, workflowId, repoOwner, repoName);
+        if ('error' in parseResult) {
+          throw new Error(`Patch generation failed for ${repoOwner}/${repoName}:\n${parseResult.error}`);
         }
 
+        const parsed = parseResult.parsed;
         patchTitle = parsed.title || patchTitle;
         patchSummary = parsed.summary || patchSummary;
 
         if (parsed.files && parsed.files.length > 0) {
           const diffs: string[] = [];
+          const replaceErrors: string[] = [];
 
           for (const fileChange of parsed.files) {
             const action = fileChange.action || 'modify';
             let oldContent = '';
-            let oldLines: string[] = [];
-            let newLines: string[] = [];
+            let newContent = '';
 
-            // For modify/delete, we need the existing content
-            if (action === 'modify' || action === 'delete') {
-              // Check if it's one of our pre-fetched files
-              if (fileChange.path === 'README.md') {
-                oldContent = readmeContent;
-              } else if (fileChange.path === 'package.json') {
-                oldContent = packageJson;
-              } else {
-                // Fetch from GitHub
-                try {
-                  const file = await this.github.getFileContents({
-                    owner: repoOwner,
-                    repo: repoName,
-                    path: fileChange.path,
-                    ref: baseSha
-                  });
-                  oldContent = file.content;
-                  this.logger.log(`Fetched ${fileChange.path} for diff generation`);
-                } catch {
-                  if (action === 'delete') {
-                    this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
-                    continue;
-                  }
-                  this.logger.warn(`Could not fetch ${fileChange.path}, treating as new file`);
-                }
+            // Helper to fetch file content
+            const fetchFileContent = async (path: string): Promise<string | null> => {
+              if (path === 'README.md') return readmeContent;
+              if (path === 'package.json') return packageJson;
+              try {
+                const file = await this.github.getFileContents({
+                  owner: repoOwner,
+                  repo: repoName,
+                  path: path,
+                  ref: baseSha
+                });
+                this.logger.log(`Fetched ${path} for diff generation`);
+                return file.content;
+              } catch {
+                return null;
               }
-              oldLines = oldContent ? oldContent.split('\n') : [];
-            }
+            };
 
-            // For create/modify, we need new content
-            if (action !== 'delete') {
-              if (!fileChange.content) {
-                this.logger.warn(`Missing content for ${action} action on ${fileChange.path}, skipping`);
+            // Handle REPLACE action (preferred for existing files)
+            if (action === 'replace') {
+              if (!fileChange.find || fileChange.replace === undefined) {
+                this.logger.warn(`Replace action missing find/replace for ${fileChange.path}, skipping`);
                 continue;
               }
-              newLines = fileChange.content.split('\n');
+
+              oldContent = await fetchFileContent(fileChange.path) || '';
+              if (!oldContent) {
+                replaceErrors.push(`File '${fileChange.path}' not found for replace action`);
+                continue;
+              }
+
+              // Use generateReplaceActionDiff which validates find matches exactly once
+              const replaceResult = generateReplaceActionDiff(
+                fileChange.path,
+                oldContent,
+                fileChange.find,
+                fileChange.replace,
+                { contextLines: 3 }
+              );
+
+              if ('error' in replaceResult) {
+                replaceErrors.push(replaceResult.error);
+                this.logger.warn(`Replace action failed: ${replaceResult.error}`);
+                continue;
+              }
+
+              diffs.push(replaceResult.diff.patch);
+              files.push({
+                path: fileChange.path,
+                additions: replaceResult.diff.additions,
+                deletions: replaceResult.diff.deletions
+              });
+
+              this.logger.log(`Generated replace diff for ${fileChange.path}: +${replaceResult.diff.additions}/-${replaceResult.diff.deletions}`);
+              continue;
             }
 
-            // Determine effective action based on what we found
-            let effectiveAction = action;
-            if (action === 'modify' && oldLines.length === 0) {
-              effectiveAction = 'create';
+            // Handle DELETE action
+            if (action === 'delete') {
+              oldContent = await fetchFileContent(fileChange.path) || '';
+              if (!oldContent) {
+                this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
+                continue;
+              }
+
+              const diffResult = generateUnifiedDiff(
+                fileChange.path,
+                oldContent,
+                '',
+                'delete',
+                { contextLines: 3 }
+              );
+              diffs.push(diffResult.patch);
+              files.push({
+                path: fileChange.path,
+                additions: 0,
+                deletions: diffResult.deletions
+              });
+
+              this.logger.log(`Generated delete diff for ${fileChange.path}: -${diffResult.deletions}`);
+              continue;
             }
 
-            const fileDiff = this.generateDiff(fileChange.path, oldLines, newLines, effectiveAction);
-            diffs.push(fileDiff);
+            // Handle MODIFY action (discouraged - requires rationale)
+            if (action === 'modify') {
+              oldContent = await fetchFileContent(fileChange.path) || '';
 
-            // Calculate additions/deletions
-            const additions = action === 'delete' ? 0 : newLines.length;
-            const deletions = action === 'create' ? 0 : oldLines.length;
-            files.push({ path: fileChange.path, additions, deletions });
+              if (!fileChange.content) {
+                this.logger.warn(`Missing content for modify action on ${fileChange.path}, skipping`);
+                continue;
+              }
+              newContent = fileChange.content;
+
+              // Log warning if rationale is missing (schema should catch this, but be defensive)
+              if (!fileChange.rationale) {
+                this.logger.warn(`Modify action on ${fileChange.path} missing rationale`);
+              }
+
+              // If file doesn't exist, treat as create
+              const effectiveAction = oldContent ? 'modify' : 'create';
+
+              const diffResult = generateUnifiedDiff(
+                fileChange.path,
+                oldContent,
+                newContent,
+                effectiveAction,
+                { contextLines: 3 }
+              );
+              diffs.push(diffResult.patch);
+              files.push({
+                path: fileChange.path,
+                additions: diffResult.additions,
+                deletions: diffResult.deletions
+              });
+
+              this.logger.log(`Generated ${effectiveAction} diff for ${fileChange.path}: +${diffResult.additions}/-${diffResult.deletions} (${diffResult.hunks} hunks)`);
+              continue;
+            }
+
+            // Handle CREATE action
+            if (action === 'create') {
+              if (!fileChange.content) {
+                this.logger.warn(`Missing content for create action on ${fileChange.path}, skipping`);
+                continue;
+              }
+              newContent = fileChange.content;
+
+              const diffResult = generateUnifiedDiff(
+                fileChange.path,
+                '',
+                newContent,
+                'create',
+                { contextLines: 3 }
+              );
+              diffs.push(diffResult.patch);
+              files.push({
+                path: fileChange.path,
+                additions: diffResult.additions,
+                deletions: diffResult.deletions
+              });
+
+              this.logger.log(`Generated create diff for ${fileChange.path}: +${diffResult.additions}`);
+            }
 
             // Check if this is a test file
             if (fileChange.path.includes('test') || fileChange.path.includes('spec') || fileChange.path.includes('__tests__')) {
@@ -572,9 +700,17 @@ export class IngestContextProcessor extends WorkerHost {
             }
           }
 
+          // Report replace action errors
+          if (replaceErrors.length > 0) {
+            this.logger.warn(`Replace action errors: ${replaceErrors.join('; ')}`);
+          }
+
           if (diffs.length > 0) {
             patchDiff = diffs.join('\n\n');
             this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
+          } else if (replaceErrors.length > 0) {
+            // If all changes failed due to replace errors, throw with details
+            throw new Error(`All file changes failed: ${replaceErrors.join('; ')}`);
           }
         }
       } else {
@@ -592,11 +728,11 @@ export class IngestContextProcessor extends WorkerHost {
           `Generated because patch output was invalid for ${repoOwner}/${repoName}.`,
           `Workflow: ${workflowId}`,
         ].join('\n');
-        const newLines = stubContent.split('\n');
         patchTitle = `Stub patch for ${repoOwner}/${repoName}`;
         patchSummary = 'Fallback patch generated in test mode.';
-        patchDiff = this.generateDiff(stubPath, [], newLines, 'create');
-        files = [{ path: stubPath, additions: newLines.length, deletions: 0 }];
+        const stubDiff = generateUnifiedDiff(stubPath, '', stubContent, 'create', { contextLines: 3 });
+        patchDiff = stubDiff.patch;
+        files = [{ path: stubPath, additions: stubDiff.additions, deletions: 0 }];
         addsTests = false;
         this.logger.warn(`Using fallback stub patch for ${repoOwner}/${repoName}`);
       } else {
@@ -613,23 +749,27 @@ export class IngestContextProcessor extends WorkerHost {
     workflowId: string,
     repoOwner: string,
     repoName: string
-  ): Promise<LLMPatchResponse | null> {
+  ): Promise<{ parsed: LLMPatchResponse } | { error: string }> {
     const initial = this.tryParseLLMResponse(raw);
     if (initial.parsed) {
-      return initial.parsed;
+      return { parsed: initial.parsed };
     }
 
-    this.logger.warn(`LLM response parse failed for ${repoOwner}/${repoName}, retrying with strict JSON request`);
+    this.logger.warn(`LLM response parse failed for ${repoOwner}/${repoName}: ${initial.error}`);
+    this.logger.warn(`Retrying with strict JSON request...`);
 
     const retryPrompt = [
-      'Your previous response was invalid JSON.',
+      'Your previous response was invalid.',
+      '',
+      `Validation error: ${initial.error}`,
+      '',
       'Return ONLY a valid JSON object with the exact schema below. No markdown, no commentary.',
       'Escape newlines in JSON strings as \\n and avoid unescaped control characters.',
       '',
       SCHEMA_DESCRIPTIONS.patch,
       '',
       'Here is your previous output. Fix it into valid JSON:',
-      raw
+      raw.substring(0, 3000) // Truncate to avoid token overflow
     ].join('\n');
 
     const retryResponse = await llmRunner.run('coder', retryPrompt, {
@@ -637,64 +777,30 @@ export class IngestContextProcessor extends WorkerHost {
     });
 
     if (!retryResponse.success || !retryResponse.rawContent) {
-      this.logger.warn(`LLM retry failed for ${repoOwner}/${repoName}: ${retryResponse.error}`);
-      return null;
+      return { error: `LLM retry failed: ${retryResponse.error || 'No response'}. Original error: ${initial.error}` };
     }
 
     const retried = this.tryParseLLMResponse(retryResponse.rawContent);
     if (!retried.parsed) {
-      this.logger.warn(`LLM retry response still invalid for ${repoOwner}/${repoName}: ${retried.error}`);
-      return null;
+      return { error: `Patch validation failed after retry: ${retried.error}` };
     }
 
-    return retried.parsed;
+    return { parsed: retried.parsed };
   }
 
   private tryParseLLMResponse(raw: string): { parsed: LLMPatchResponse | null; error?: string } {
-    // Use Zod schema for validation
+    // Use Zod schema for strict validation (no fallback to ensure quality constraints)
     const result = safeParseLLMResponse(raw, PatchGenerationSchema);
     if (result.success) {
       return { parsed: result.data };
     }
 
-    // Fallback to legacy validation for backwards compatibility
-    try {
-      let jsonContent = this.extractJsonBlock(raw);
-      if (!jsonContent) {
-        return { parsed: null, error: result.error || 'No JSON object found' };
-      }
-      jsonContent = this.sanitizeJsonString(jsonContent);
-      const rawParsed = JSON.parse(jsonContent);
-      const parsed = this.validateLLMResponse(rawParsed);
-      if (!parsed) {
-        return { parsed: null, error: result.error || 'Invalid response structure' };
-      }
-      return { parsed };
-    } catch (err: any) {
-      return { parsed: null, error: result.error || String(err?.message ?? err) };
-    }
-  }
-
-  private extractJsonBlock(raw: string): string | null {
-    const trimmed = raw.trim();
-    if (trimmed.startsWith('```')) {
-      const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      if (fenceMatch && fenceMatch[1]) {
-        return fenceMatch[1].trim();
-      }
-    }
-
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      return trimmed.slice(start, end + 1);
-    }
-
-    return null;
-  }
-
-  private sanitizeJsonString(input: string): string {
-    return input.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+    // No fallback - strict Zod validation enforces:
+    // - replace action preferred (find must match exactly once)
+    // - modify requires rationale
+    // - max 200 lines for modify
+    // - max 5 files per patch
+    return { parsed: null, error: result.error };
   }
 
   private buildDecisionArtifact(
@@ -726,79 +832,5 @@ export class IngestContextProcessor extends WorkerHost {
     lines.push('', `- Recommendation: PROCEED`);
 
     return lines.join('\n');
-  }
-
-  private generateDiff(
-    path: string,
-    oldLines: string[],
-    newLines: string[],
-    action: 'create' | 'modify' | 'delete'
-  ): string {
-    const diffLines: string[] = [`diff --git a/${path} b/${path}`];
-
-    if (action === 'create') {
-      diffLines.push('new file mode 100644');
-      diffLines.push('index 0000000..1111111');
-      diffLines.push('--- /dev/null');
-      diffLines.push(`+++ b/${path}`);
-      diffLines.push(`@@ -0,0 +1,${newLines.length} @@`);
-      for (const line of newLines) {
-        diffLines.push(`+${line}`);
-      }
-    } else if (action === 'delete') {
-      diffLines.push('deleted file mode 100644');
-      diffLines.push('index 1111111..0000000');
-      diffLines.push(`--- a/${path}`);
-      diffLines.push('+++ /dev/null');
-      diffLines.push(`@@ -1,${oldLines.length} +0,0 @@`);
-      for (const line of oldLines) {
-        diffLines.push(`-${line}`);
-      }
-    } else {
-      // modify
-      diffLines.push('index 0000000..1111111 100644');
-      diffLines.push(`--- a/${path}`);
-      diffLines.push(`+++ b/${path}`);
-      diffLines.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
-      for (const line of oldLines) {
-        diffLines.push(`-${line}`);
-      }
-      for (const line of newLines) {
-        diffLines.push(`+${line}`);
-      }
-    }
-
-    return diffLines.join('\n');
-  }
-
-  private validateLLMResponse(parsed: unknown): LLMPatchResponse | null {
-    if (!parsed || typeof parsed !== 'object') return null;
-
-    const response = parsed as Record<string, unknown>;
-
-    // Validate files array if present
-    if (response.files && Array.isArray(response.files)) {
-      const validFiles = response.files.filter((f: unknown) => {
-        if (!f || typeof f !== 'object') return false;
-        const file = f as Record<string, unknown>;
-        if (typeof file.path !== 'string' || !file.path.trim()) return false;
-        if (!['create', 'modify', 'delete'].includes(file.action as string)) {
-          // Default to 'modify' if action missing
-          file.action = 'modify';
-        }
-        // content required for create/modify
-        if (file.action !== 'delete' && typeof file.content !== 'string') return false;
-        return true;
-      });
-
-      if (validFiles.length === 0) return null;
-      response.files = validFiles;
-    }
-
-    return {
-      title: typeof response.title === 'string' ? response.title : undefined,
-      summary: typeof response.summary === 'string' ? response.summary : undefined,
-      files: response.files as FileChange[] | undefined
-    };
   }
 }

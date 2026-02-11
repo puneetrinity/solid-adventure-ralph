@@ -114,20 +114,57 @@ export type SummaryAnalysis = z.infer<typeof SummaryAnalysisSchema>;
 // Patch Generation Schema
 // ============================================================================
 
+// Maximum lines of content allowed per file to prevent full-file rewrites
+const MAX_CONTENT_LINES = 200;
+
 export const FileChangeSchema = z.object({
   path: z.string().min(1, 'File path is required'),
-  action: z.enum(['create', 'modify', 'delete']),
+  action: z.enum(['create', 'modify', 'delete', 'replace']),
+  // For create/modify: full file content
   content: z.string().optional(),
+  // For replace action: targeted string replacement
+  find: z.string().optional(),
+  replace: z.string().optional(),
+  // Required rationale for modify action (full-file rewrite)
+  rationale: z.string().optional(),
   summary: z.string().optional()
 }).refine(
-  (data) => data.action === 'delete' || (data.content && data.content.length > 0),
-  { message: 'Content is required for create/modify actions' }
+  (data) => {
+    // delete needs nothing
+    if (data.action === 'delete') return true;
+    // replace needs find and replace strings
+    if (data.action === 'replace') {
+      return data.find && data.find.length > 0 && data.replace !== undefined;
+    }
+    // create/modify need content
+    return data.content && data.content.length > 0;
+  },
+  { message: 'Content required for create/modify; find+replace required for replace action' }
+).refine(
+  (data) => {
+    // Enforce max lines for modify action (full-file rewrites)
+    if (data.action === 'modify' && data.content) {
+      const lines = data.content.split('\n').length;
+      return lines <= MAX_CONTENT_LINES;
+    }
+    return true;
+  },
+  { message: `Full-file modify exceeds ${MAX_CONTENT_LINES} lines. Use 'replace' action for targeted edits instead.` }
+).refine(
+  (data) => {
+    // Require rationale for modify action (discourages full rewrites)
+    if (data.action === 'modify') {
+      return data.rationale && data.rationale.length >= 10;
+    }
+    return true;
+  },
+  { message: "Modify action requires a 'rationale' field explaining why replace action cannot be used" }
 );
 
 export const PatchGenerationSchema = z.object({
   title: z.string().max(100, 'Title must be 100 characters or less'),
   summary: z.string(),
-  files: z.array(FileChangeSchema).min(1, 'At least one file change is required')
+  files: z.array(FileChangeSchema).min(1, 'At least one file change is required').max(5, 'Maximum 5 files per patch')
 });
 
 export type PatchGeneration = z.infer<typeof PatchGenerationSchema>;
@@ -391,10 +428,28 @@ export const SCHEMA_DESCRIPTIONS: Record<SchemaName, string> = {
   "summary": "Brief description of what this change does",
   "files": [{
     "path": "relative/path/to/file.ts",
-    "action": "create" | "modify" | "delete",
-    "content": "complete new file content (not needed for delete)"
+    "action": "replace" | "create" | "modify" | "delete",
+
+    // For "replace" action (PREFERRED for existing files):
+    "find": "exact string to find (must match exactly once)",
+    "replace": "string to replace it with",
+
+    // For "create" action (new files only):
+    "content": "complete file content",
+
+    // For "modify" action (DISCOURAGED - use replace instead):
+    "content": "complete new file content (max 200 lines)",
+    "rationale": "Why replace action cannot be used (required)"
+
+    // For "delete" action: no additional fields needed
   }]
-}`,
+}
+
+IMPORTANT:
+- Use "replace" action for existing files (safer, surgical edits)
+- The "find" string must match EXACTLY ONCE in the file
+- Only use "modify" when replacing large sections (>50% of file)
+- Maximum 5 files per patch`,
 
   taskDecomposition: `{
   "summary": "Brief summary of task breakdown",

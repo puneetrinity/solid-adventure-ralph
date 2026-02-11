@@ -1,6 +1,7 @@
 import {
   applyDiffToContent,
-  extractFileChangesFromDiff
+  extractFileChangesFromDiff,
+  validateAndApplyDiff
 } from '@core/github/patch-applicator';
 
 describe('applyDiffToContent', () => {
@@ -190,6 +191,40 @@ index abc123..0000000
     const changes = extractFileChangesFromDiff(SINGLE_FILE_DIFF);
     expect(changes[0].diffContent).toContain('@@ -1,3 +1,4 @@');
     expect(changes[0].diffContent).toContain('+import { bar }');
+  });
+});
+
+describe('validateAndApplyDiff', () => {
+  test('applies diff when context matches', () => {
+    const original = `line1
+line2
+line3`;
+    const diff = `@@ -1,3 +1,3 @@
+ line1
+-line2
++line2b
+ line3`;
+
+    const result = validateAndApplyDiff(original, diff);
+    expect(result.success).toBe(true);
+    expect(result.content).toBe(`line1
+line2b
+line3`);
+  });
+
+  test('fails when context does not match', () => {
+    const original = `line1
+line2
+line3`;
+    const diff = `@@ -1,3 +1,3 @@
+ line1
+-line2
++line2b
+ lineX`;
+
+    const result = validateAndApplyDiff(original, diff);
+    expect(result.success).toBe(false);
+    expect(result.validationErrors && result.validationErrors.length).toBeGreaterThan(0);
   });
 });
 
