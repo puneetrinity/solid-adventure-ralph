@@ -111,9 +111,27 @@ export const SummaryAnalysisSchema = z.object({
 export type SummaryAnalysis = z.infer<typeof SummaryAnalysisSchema>;
 
 // ============================================================================
-// Patch Generation Schema
+// Patch Generation Schema (Two-Pass)
 // ============================================================================
 
+// Pass 1: File selection - LLM identifies which files to change
+export const FileSelectionSchema = z.object({
+  path: z.string().min(1, 'File path is required'),
+  action: z.enum(['create', 'modify', 'delete', 'replace']),
+  description: z.string().min(10, 'Description of intended change is required'),
+  reason: z.string().optional() // Why this file needs to change
+});
+
+export const PatchPlanSchema = z.object({
+  title: z.string().max(100, 'Title must be 100 characters or less'),
+  summary: z.string(),
+  files: z.array(FileSelectionSchema).min(1, 'At least one file change is required').max(5, 'Maximum 5 files per patch')
+});
+
+export type PatchPlan = z.infer<typeof PatchPlanSchema>;
+export type FileSelection = z.infer<typeof FileSelectionSchema>;
+
+// Pass 2: Full patch generation with actual content
 // Maximum lines of content allowed per file to prevent full-file rewrites
 const MAX_CONTENT_LINES = 200;
 
@@ -354,6 +372,7 @@ export const SCHEMAS = {
   architecture: ArchitectureAnalysisSchema,
   timeline: TimelineAnalysisSchema,
   summary: SummaryAnalysisSchema,
+  patchPlan: PatchPlanSchema,
   patch: PatchGenerationSchema,
   taskDecomposition: TaskDecompositionSchema,
   codeReview: CodeReviewSchema
@@ -422,6 +441,21 @@ export const SCHEMA_DESCRIPTIONS: Record<SchemaName, string> = {
   "links": ["https://...", "..."],
   "recommendation": "proceed" | "hold"
 }`,
+
+  patchPlan: `{
+  "title": "Short title for the change (max 100 chars)",
+  "summary": "Brief description of what this change does",
+  "files": [{
+    "path": "relative/path/to/file.ts",
+    "action": "replace" | "create" | "modify" | "delete",
+    "description": "What change will be made to this file",
+    "reason": "Why this file needs to change (optional)"
+  }]
+}
+
+NOTE: This is Pass 1 - identify files and describe changes. Actual code comes in Pass 2.
+- Maximum 5 files per patch
+- Use paths from the repository file structure`,
 
   patch: `{
   "title": "Short title for the change (max 100 chars)",

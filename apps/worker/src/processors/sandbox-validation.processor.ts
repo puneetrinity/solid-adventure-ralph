@@ -164,7 +164,46 @@ export class SandboxValidationProcessor extends WorkerHost {
     const patchApplicator = new PatchApplicator(this.prisma, writeGate);
 
     try {
-      this.logger.log(`Applying patches to sandbox branch for ${repoOwner}/${repoName}`);
+      // Validate patches BEFORE applying (equivalent to git apply --check)
+      this.logger.log(`Validating patches for ${repoOwner}/${repoName} against ${patchSet.baseSha}...`);
+
+      const validationResult = await patchApplicator.validatePatches({
+        patchSetId,
+        owner: repoOwner,
+        repo: repoName,
+        ref: patchSet.baseSha
+      });
+
+      if (!validationResult.valid) {
+        const errorDetails = validationResult.errors
+          .map(e => `  - ${e.file}: ${e.error}${e.details ? `\n    ${e.details.join('\n    ')}` : ''}`)
+          .join('\n');
+
+        const errorMsg = `Patch validation failed (git apply --check equivalent):\n${errorDetails}`;
+        this.logger.error(errorMsg);
+
+        // Store validation failure in workflow feedback for UI display
+        await this.prisma.workflow.update({
+          where: { id: workflowId },
+          data: {
+            feedback: errorMsg,
+            stageStatus: 'needs_changes',
+            stageUpdatedAt: new Date()
+          }
+        });
+
+        await this.prisma.workflowEvent.create({
+          data: {
+            workflowId,
+            type: 'worker.sandbox.validation_failed',
+            payload: { patchSetId, errors: validationResult.errors }
+          }
+        });
+
+        throw new Error(errorMsg);
+      }
+
+      this.logger.log(`Patch validation passed, applying to sandbox branch for ${repoOwner}/${repoName}`);
 
       const applyResult = await patchApplicator.applyPatchesToBranch({
         workflowId,

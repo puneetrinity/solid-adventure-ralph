@@ -10,6 +10,8 @@ import {
   LLMRunner,
   createProviderWithFallback,
   PatchGenerationSchema,
+  PatchPlanSchema,
+  type PatchPlan,
   safeParseLLMResponse,
   SCHEMA_DESCRIPTIONS,
   buildRetryPrompt,
@@ -392,7 +394,7 @@ export class IngestContextProcessor extends WorkerHost {
     repoContext: RepoContext,
     llmProvider: ReturnType<typeof createProviderWithFallback>
   ): Promise<PatchResult> {
-    const { owner: repoOwner, repo: repoName, baseBranch } = repoConfig;
+    const { owner: repoOwner, repo: repoName } = repoConfig;
     const { readmeContent, packageJson, tree, storedContextSummary, storedContextPath, baseSha } = repoContext;
 
     let patchTitle = workflow.goal?.substring(0, 50) || 'Code change';
@@ -408,136 +410,78 @@ export class IngestContextProcessor extends WorkerHost {
     this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) to generate patch for ${repoOwner}/${repoName}...`);
     const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
 
-      const promptParts = [
-        `You are an expert software engineer. Your task is to implement the following request by modifying or creating files in the repository.`,
-        ``
-      ];
+    // Fetch approved artifacts to guide patch generation
+    const approvedArtifacts = await this.fetchApprovedArtifacts(workflowId);
 
-      // Include stored project context summary if available
-      if (storedContextSummary) {
-        promptParts.push(
-          `## Project Context (from ${storedContextPath})`,
-          storedContextSummary,
-          ``
-        );
+    // ============================================================================
+    // PASS 1: File Selection - Ask LLM to identify which files need changes
+    // ============================================================================
+    this.logger.log(`Pass 1: Requesting file selection plan for ${repoOwner}/${repoName}...`);
+
+    const pass1Prompt = this.buildPass1Prompt(
+      workflow,
+      repoConfig,
+      tree,
+      storedContextSummary,
+      storedContextPath,
+      approvedArtifacts
+    );
+
+    const pass1Response = await llmRunner.run('coder', pass1Prompt, {
+      context: { workflowId }
+    });
+
+    let patchPlan: PatchPlan | null = null;
+    if (pass1Response.success && pass1Response.rawContent) {
+      const planResult = await this.parseOrRetryPatchPlan(pass1Response.rawContent, llmRunner, workflowId, repoOwner, repoName);
+      if ('error' in planResult) {
+        const allowFallback = process.env.ALLOW_PATCH_FALLBACK === 'true';
+        if (allowFallback) {
+          this.logger.warn(`Pass 1 failed for ${repoOwner}/${repoName}: ${planResult.error}`);
+          this.logger.warn(`ALLOW_PATCH_FALLBACK is enabled, will use stub patch`);
+        } else {
+          throw new Error(`Patch planning failed for ${repoOwner}/${repoName}:\n${planResult.error}`);
+        }
+      } else {
+        patchPlan = planResult.parsed;
+        patchTitle = patchPlan.title || patchTitle;
+        patchSummary = patchPlan.summary || patchSummary;
+        this.logger.log(`Pass 1 complete: ${patchPlan.files.length} files selected for ${repoOwner}/${repoName}`);
       }
+    } else {
+      this.logger.warn(`Pass 1 LLM call failed for ${repoOwner}/${repoName}: ${pass1Response.error}`);
+    }
 
-      promptParts.push(
-        `## Goal`,
-        workflow.goal || 'Improve the codebase',
-        ``
+    // ============================================================================
+    // PASS 2: Generate actual changes with file contents
+    // ============================================================================
+    if (patchPlan && patchPlan.files.length > 0) {
+      this.logger.log(`Pass 2: Fetching ${patchPlan.files.length} selected files and generating changes...`);
+
+      // Fetch content for all selected files
+      const fileContents = await this.fetchSelectedFiles(patchPlan.files, repoOwner, repoName, baseSha, readmeContent, packageJson);
+
+      // Build Pass 2 prompt with actual file contents
+      const pass2Prompt = this.buildPass2Prompt(
+        workflow,
+        repoConfig,
+        patchPlan,
+        fileContents,
+        storedContextSummary,
+        storedContextPath,
+        approvedArtifacts
       );
 
-      if (workflow.context) {
-        promptParts.push(`## Additional Context`, workflow.context, ``);
-      }
-
-      if (workflow.feedback) {
-        promptParts.push(`## Previous Feedback (address these issues)`, workflow.feedback, ``);
-      }
-
-      promptParts.push(
-        `## Repository: ${repoOwner}/${repoName}`,
-        ``
-      );
-
-      // Include tree structure (limited to avoid token overflow)
-      if (tree.length > 0) {
-        const fileTree = tree
-          .filter(item => item.type === 'blob')
-          .slice(0, 200) // Limit to first 200 files
-          .map(item => item.path)
-          .join('\n');
-        promptParts.push(
-          `## Repository File Structure`,
-          '```',
-          fileTree,
-          '```',
-          ``
-        );
-      }
-
-      promptParts.push(`## Key Files (current content)`, ``);
-
-      if (readmeContent) {
-        promptParts.push(`### README.md`, '```markdown', readmeContent, '```', ``);
-      }
-
-      if (packageJson) {
-        promptParts.push(`### package.json`, '```json', packageJson, '```', ``);
-      }
-
-      promptParts.push(
-        `## Instructions`,
-        `Based on the goal and context, determine which files need to be changed.`,
-        ``,
-        `IMPORTANT: Prefer "replace" action for existing files. Only use "modify" for major refactors (>50% of file).`,
-        ``,
-        `Respond with ONLY a JSON object (no markdown code blocks, no explanation):`,
-        `{`,
-        `  "title": "Short title for the change (max 50 chars)",`,
-        `  "summary": "Brief description of what this change does",`,
-        `  "files": [`,
-        `    // PREFERRED: For surgical edits to existing files`,
-        `    {`,
-        `      "path": "relative/path/to/file.ts",`,
-        `      "action": "replace",`,
-        `      "find": "exact string to find (must match exactly once in file)",`,
-        `      "replace": "string to replace it with"`,
-        `    },`,
-        `    // For creating new files only`,
-        `    {`,
-        `      "path": "relative/path/to/new-file.ts",`,
-        `      "action": "create",`,
-        `      "content": "complete file content"`,
-        `    },`,
-        `    // DISCOURAGED: Only for large refactors (>50% of file)`,
-        `    {`,
-        `      "path": "relative/path/to/file.ts",`,
-        `      "action": "modify",`,
-        `      "content": "complete new file content (max 200 lines)",`,
-        `      "rationale": "Why replace action cannot be used"`,
-        `    },`,
-        `    // For deleting files`,
-        `    {`,
-        `      "path": "relative/path/to/file.ts",`,
-        `      "action": "delete"`,
-        `    }`,
-        `  ]`,
-        `}`,
-        ``,
-        `Critical Rules:`,
-        `- Return valid JSON only (no markdown fences, no commentary)`,
-        `- Escape newlines in JSON strings as \\n`,
-        `- Max 5 files per patch`,
-        `- Use only paths from the repository file structure above`,
-        ``,
-        `Action Guidelines:`,
-        `- "replace": PREFERRED. The "find" string must match EXACTLY ONCE in the file. Include enough context to be unique.`,
-        `- "create": For new files only. Provide complete file content.`,
-        `- "modify": DISCOURAGED. Only use when replacing >50% of a file. Requires "rationale" explaining why "replace" won't work. Max 200 lines.`,
-        `- "delete": For removing files.`,
-        ``,
-        `Quality Rules:`,
-        `- Make minimal, focused changes`,
-        `- Include necessary imports in replace/modify content`,
-        `- Preserve existing code style`,
-        `- Do not rewrite entire files unless absolutely necessary`
-      );
-
-      const prompt = promptParts.join('\n');
-
-      const response = await llmRunner.run('coder', prompt, {
+      const pass2Response = await llmRunner.run('coder', pass2Prompt, {
         context: { workflowId }
       });
 
-      if (response.success && response.rawContent) {
-        const parseResult = await this.parseOrRetryLLMResponse(response.rawContent, llmRunner, workflowId, repoOwner, repoName);
+      if (pass2Response.success && pass2Response.rawContent) {
+        const parseResult = await this.parseOrRetryLLMResponse(pass2Response.rawContent, llmRunner, workflowId, repoOwner, repoName);
         if ('error' in parseResult) {
-          // If ALLOW_PATCH_FALLBACK is set, log warning and continue (will use stub patch)
           const allowFallback = process.env.ALLOW_PATCH_FALLBACK === 'true';
           if (allowFallback) {
-            this.logger.warn(`Patch validation failed for ${repoOwner}/${repoName}: ${parseResult.error}`);
+            this.logger.warn(`Pass 2 validation failed for ${repoOwner}/${repoName}: ${parseResult.error}`);
             this.logger.warn(`ALLOW_PATCH_FALLBACK is enabled, will use stub patch`);
           } else {
             throw new Error(`Patch generation failed for ${repoOwner}/${repoName}:\n${parseResult.error}`);
@@ -550,174 +494,157 @@ export class IngestContextProcessor extends WorkerHost {
           patchSummary = parsed.summary || patchSummary;
 
           if (parsed.files && parsed.files.length > 0) {
-          const diffs: string[] = [];
-          const replaceErrors: string[] = [];
+            const diffs: string[] = [];
+            const replaceErrors: string[] = [];
 
-          for (const fileChange of parsed.files) {
-            const action = fileChange.action || 'modify';
-            let oldContent = '';
-            let newContent = '';
+            for (const fileChange of parsed.files) {
+              const action = fileChange.action || 'modify';
+              let oldContent = '';
+              let newContent = '';
 
-            // Helper to fetch file content
-            const fetchFileContent = async (path: string): Promise<string | null> => {
-              if (path === 'README.md') return readmeContent;
-              if (path === 'package.json') return packageJson;
-              try {
-                const file = await this.github.getFileContents({
-                  owner: repoOwner,
-                  repo: repoName,
-                  path: path,
-                  ref: baseSha
+              // Get file content from our pre-fetched map
+              const getFileContent = (path: string): string | null => {
+                return fileContents.get(path) ?? null;
+              };
+
+              // Handle REPLACE action (preferred for existing files)
+              if (action === 'replace') {
+                if (!fileChange.find || fileChange.replace === undefined) {
+                  this.logger.warn(`Replace action missing find/replace for ${fileChange.path}, skipping`);
+                  continue;
+                }
+
+                oldContent = getFileContent(fileChange.path) || '';
+                if (!oldContent) {
+                  replaceErrors.push(`File '${fileChange.path}' not found for replace action`);
+                  continue;
+                }
+
+                const replaceResult = generateReplaceActionDiff(
+                  fileChange.path,
+                  oldContent,
+                  fileChange.find,
+                  fileChange.replace,
+                  { contextLines: 3 }
+                );
+
+                if ('error' in replaceResult) {
+                  replaceErrors.push(replaceResult.error);
+                  this.logger.warn(`Replace action failed: ${replaceResult.error}`);
+                  continue;
+                }
+
+                diffs.push(replaceResult.diff.patch);
+                files.push({
+                  path: fileChange.path,
+                  additions: replaceResult.diff.additions,
+                  deletions: replaceResult.diff.deletions
                 });
-                this.logger.log(`Fetched ${path} for diff generation`);
-                return file.content;
-              } catch {
-                return null;
-              }
-            };
 
-            // Handle REPLACE action (preferred for existing files)
-            if (action === 'replace') {
-              if (!fileChange.find || fileChange.replace === undefined) {
-                this.logger.warn(`Replace action missing find/replace for ${fileChange.path}, skipping`);
+                this.logger.log(`Generated replace diff for ${fileChange.path}: +${replaceResult.diff.additions}/-${replaceResult.diff.deletions}`);
                 continue;
               }
 
-              oldContent = await fetchFileContent(fileChange.path) || '';
-              if (!oldContent) {
-                replaceErrors.push(`File '${fileChange.path}' not found for replace action`);
+              // Handle DELETE action
+              if (action === 'delete') {
+                oldContent = getFileContent(fileChange.path) || '';
+                if (!oldContent) {
+                  this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
+                  continue;
+                }
+
+                const diffResult = generateUnifiedDiff(
+                  fileChange.path,
+                  oldContent,
+                  '',
+                  'delete',
+                  { contextLines: 3 }
+                );
+                diffs.push(diffResult.patch);
+                files.push({
+                  path: fileChange.path,
+                  additions: 0,
+                  deletions: diffResult.deletions
+                });
+
+                this.logger.log(`Generated delete diff for ${fileChange.path}: -${diffResult.deletions}`);
                 continue;
               }
 
-              // Use generateReplaceActionDiff which validates find matches exactly once
-              const replaceResult = generateReplaceActionDiff(
-                fileChange.path,
-                oldContent,
-                fileChange.find,
-                fileChange.replace,
-                { contextLines: 3 }
-              );
+              // Handle MODIFY action (discouraged - requires rationale)
+              if (action === 'modify') {
+                oldContent = getFileContent(fileChange.path) || '';
 
-              if ('error' in replaceResult) {
-                replaceErrors.push(replaceResult.error);
-                this.logger.warn(`Replace action failed: ${replaceResult.error}`);
+                if (!fileChange.content) {
+                  this.logger.warn(`Missing content for modify action on ${fileChange.path}, skipping`);
+                  continue;
+                }
+                newContent = fileChange.content;
+
+                if (!fileChange.rationale) {
+                  this.logger.warn(`Modify action on ${fileChange.path} missing rationale`);
+                }
+
+                const effectiveAction = oldContent ? 'modify' : 'create';
+
+                const diffResult = generateUnifiedDiff(
+                  fileChange.path,
+                  oldContent,
+                  newContent,
+                  effectiveAction,
+                  { contextLines: 3 }
+                );
+                diffs.push(diffResult.patch);
+                files.push({
+                  path: fileChange.path,
+                  additions: diffResult.additions,
+                  deletions: diffResult.deletions
+                });
+
+                this.logger.log(`Generated ${effectiveAction} diff for ${fileChange.path}: +${diffResult.additions}/-${diffResult.deletions} (${diffResult.hunks} hunks)`);
                 continue;
               }
 
-              diffs.push(replaceResult.diff.patch);
-              files.push({
-                path: fileChange.path,
-                additions: replaceResult.diff.additions,
-                deletions: replaceResult.diff.deletions
-              });
+              // Handle CREATE action
+              if (action === 'create') {
+                if (!fileChange.content) {
+                  this.logger.warn(`Missing content for create action on ${fileChange.path}, skipping`);
+                  continue;
+                }
+                newContent = fileChange.content;
 
-              this.logger.log(`Generated replace diff for ${fileChange.path}: +${replaceResult.diff.additions}/-${replaceResult.diff.deletions}`);
-              continue;
+                const diffResult = generateUnifiedDiff(
+                  fileChange.path,
+                  '',
+                  newContent,
+                  'create',
+                  { contextLines: 3 }
+                );
+                diffs.push(diffResult.patch);
+                files.push({
+                  path: fileChange.path,
+                  additions: diffResult.additions,
+                  deletions: diffResult.deletions
+                });
+
+                this.logger.log(`Generated create diff for ${fileChange.path}: +${diffResult.additions}`);
+              }
+
+              // Check if this is a test file
+              if (fileChange.path.includes('test') || fileChange.path.includes('spec') || fileChange.path.includes('__tests__')) {
+                addsTests = true;
+              }
             }
 
-            // Handle DELETE action
-            if (action === 'delete') {
-              oldContent = await fetchFileContent(fileChange.path) || '';
-              if (!oldContent) {
-                this.logger.warn(`Could not fetch ${fileChange.path} for deletion, skipping`);
-                continue;
-              }
-
-              const diffResult = generateUnifiedDiff(
-                fileChange.path,
-                oldContent,
-                '',
-                'delete',
-                { contextLines: 3 }
-              );
-              diffs.push(diffResult.patch);
-              files.push({
-                path: fileChange.path,
-                additions: 0,
-                deletions: diffResult.deletions
-              });
-
-              this.logger.log(`Generated delete diff for ${fileChange.path}: -${diffResult.deletions}`);
-              continue;
+            // Report replace action errors
+            if (replaceErrors.length > 0) {
+              this.logger.warn(`Replace action errors: ${replaceErrors.join('; ')}`);
             }
-
-            // Handle MODIFY action (discouraged - requires rationale)
-            if (action === 'modify') {
-              oldContent = await fetchFileContent(fileChange.path) || '';
-
-              if (!fileChange.content) {
-                this.logger.warn(`Missing content for modify action on ${fileChange.path}, skipping`);
-                continue;
-              }
-              newContent = fileChange.content;
-
-              // Log warning if rationale is missing (schema should catch this, but be defensive)
-              if (!fileChange.rationale) {
-                this.logger.warn(`Modify action on ${fileChange.path} missing rationale`);
-              }
-
-              // If file doesn't exist, treat as create
-              const effectiveAction = oldContent ? 'modify' : 'create';
-
-              const diffResult = generateUnifiedDiff(
-                fileChange.path,
-                oldContent,
-                newContent,
-                effectiveAction,
-                { contextLines: 3 }
-              );
-              diffs.push(diffResult.patch);
-              files.push({
-                path: fileChange.path,
-                additions: diffResult.additions,
-                deletions: diffResult.deletions
-              });
-
-              this.logger.log(`Generated ${effectiveAction} diff for ${fileChange.path}: +${diffResult.additions}/-${diffResult.deletions} (${diffResult.hunks} hunks)`);
-              continue;
-            }
-
-            // Handle CREATE action
-            if (action === 'create') {
-              if (!fileChange.content) {
-                this.logger.warn(`Missing content for create action on ${fileChange.path}, skipping`);
-                continue;
-              }
-              newContent = fileChange.content;
-
-              const diffResult = generateUnifiedDiff(
-                fileChange.path,
-                '',
-                newContent,
-                'create',
-                { contextLines: 3 }
-              );
-              diffs.push(diffResult.patch);
-              files.push({
-                path: fileChange.path,
-                additions: diffResult.additions,
-                deletions: diffResult.deletions
-              });
-
-              this.logger.log(`Generated create diff for ${fileChange.path}: +${diffResult.additions}`);
-            }
-
-            // Check if this is a test file
-            if (fileChange.path.includes('test') || fileChange.path.includes('spec') || fileChange.path.includes('__tests__')) {
-              addsTests = true;
-            }
-          }
-
-          // Report replace action errors
-          if (replaceErrors.length > 0) {
-            this.logger.warn(`Replace action errors: ${replaceErrors.join('; ')}`);
-          }
 
             if (diffs.length > 0) {
               patchDiff = diffs.join('\n\n');
-              this.logger.log(`LLM generated ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
+              this.logger.log(`Pass 2 complete: ${files.length} file changes for ${repoOwner}/${repoName}: ${patchTitle}`);
             } else if (replaceErrors.length > 0) {
-              // If all changes failed due to replace errors, don't throw if fallback is allowed
               const allowFallback = process.env.ALLOW_PATCH_FALLBACK === 'true';
               if (!allowFallback) {
                 throw new Error(`All file changes failed: ${replaceErrors.join('; ')}`);
@@ -727,8 +654,9 @@ export class IngestContextProcessor extends WorkerHost {
           }
         }
       } else {
-        this.logger.warn(`LLM call failed for ${repoOwner}/${repoName}: ${response.error}`);
+        this.logger.warn(`Pass 2 LLM call failed for ${repoOwner}/${repoName}: ${pass2Response.error}`);
       }
+    }
 
     // Block progression if LLM didn't produce a usable diff (unless fallback is allowed)
     if (!patchDiff) {
@@ -754,6 +682,297 @@ export class IngestContextProcessor extends WorkerHost {
     }
 
     return { patchTitle, patchSummary, patchDiff, files, addsTests };
+  }
+
+  /**
+   * Build Pass 1 prompt for file selection.
+   * Asks LLM to identify which files need to be changed without actual code.
+   */
+  private buildPass1Prompt(
+    workflow: { goal: string | null; context: string | null; feedback: string | null },
+    repoConfig: RepoConfig,
+    tree: Array<{ path: string; type: 'blob' | 'tree'; size?: number }>,
+    storedContextSummary: string | undefined,
+    storedContextPath: string | undefined,
+    approvedArtifacts: { summary: string | null; architecture: string | null; timeline: string | null }
+  ): string {
+    const { owner: repoOwner, repo: repoName } = repoConfig;
+    const promptParts = [
+      `You are an expert software engineer. Your task is to PLAN which files need to be changed to implement the following request.`,
+      ``,
+      `DO NOT write any code yet. Just identify the files and describe what changes each file needs.`,
+      ``
+    ];
+
+    // Include approved plan artifacts
+    if (approvedArtifacts.summary) {
+      promptParts.push(
+        `## Approved Summary`,
+        `The following summary was approved for this implementation:`,
+        '```',
+        approvedArtifacts.summary,
+        '```',
+        ``
+      );
+    }
+
+    if (approvedArtifacts.architecture) {
+      promptParts.push(
+        `## Approved Architecture`,
+        `Follow this approved architecture approach:`,
+        '```',
+        approvedArtifacts.architecture,
+        '```',
+        ``
+      );
+    }
+
+    if (approvedArtifacts.timeline) {
+      promptParts.push(
+        `## Approved Timeline/Tasks`,
+        `Implement according to this approved task breakdown:`,
+        '```',
+        approvedArtifacts.timeline,
+        '```',
+        ``
+      );
+    }
+
+    if (storedContextSummary) {
+      promptParts.push(
+        `## Project Context (from ${storedContextPath})`,
+        storedContextSummary,
+        ``
+      );
+    }
+
+    promptParts.push(
+      `## Goal`,
+      workflow.goal || 'Improve the codebase',
+      ``
+    );
+
+    if (workflow.context) {
+      promptParts.push(`## Additional Context`, workflow.context, ``);
+    }
+
+    if (workflow.feedback) {
+      promptParts.push(`## Previous Feedback (address these issues)`, workflow.feedback, ``);
+    }
+
+    promptParts.push(
+      `## Repository: ${repoOwner}/${repoName}`,
+      ``
+    );
+
+    // Include tree structure
+    if (tree.length > 0) {
+      const fileTree = tree
+        .filter(item => item.type === 'blob')
+        .slice(0, 200)
+        .map(item => item.path)
+        .join('\n');
+      promptParts.push(
+        `## Repository File Structure`,
+        '```',
+        fileTree,
+        '```',
+        ``
+      );
+    }
+
+    promptParts.push(
+      `## Instructions`,
+      `Identify which files need to be created, modified, or deleted to achieve the goal.`,
+      ``,
+      `Respond with ONLY a JSON object (no markdown code blocks, no explanation):`,
+      SCHEMA_DESCRIPTIONS.patchPlan,
+      ``,
+      `Rules:`,
+      `- Maximum 5 files per patch`,
+      `- Use only paths from the repository file structure above (or new paths for create)`,
+      `- Prefer "replace" action for existing files (surgical edits)`,
+      `- Use "modify" only for major refactors (>50% of file)`,
+      `- Provide clear descriptions of what each file change will do`,
+      `- Return valid JSON only`
+    );
+
+    return promptParts.join('\n');
+  }
+
+  /**
+   * Fetch contents of files selected in Pass 1.
+   */
+  private async fetchSelectedFiles(
+    selectedFiles: Array<{ path: string; action: string }>,
+    repoOwner: string,
+    repoName: string,
+    baseSha: string,
+    readmeContent: string,
+    packageJson: string
+  ): Promise<Map<string, string>> {
+    const fileContents = new Map<string, string>();
+
+    for (const file of selectedFiles) {
+      // Skip files being created (no existing content)
+      if (file.action === 'create') {
+        this.logger.log(`Skipping fetch for new file: ${file.path}`);
+        continue;
+      }
+
+      // Use cached content for README and package.json
+      if (file.path === 'README.md' && readmeContent) {
+        fileContents.set(file.path, readmeContent);
+        continue;
+      }
+      if (file.path === 'package.json' && packageJson) {
+        fileContents.set(file.path, packageJson);
+        continue;
+      }
+
+      // Fetch from GitHub
+      try {
+        const content = await this.github.getFileContents({
+          owner: repoOwner,
+          repo: repoName,
+          path: file.path,
+          ref: baseSha
+        });
+        fileContents.set(file.path, content.content);
+        this.logger.log(`Fetched ${file.path} (${content.size} bytes)`);
+      } catch (err) {
+        this.logger.warn(`Could not fetch ${file.path}: ${err}`);
+      }
+    }
+
+    return fileContents;
+  }
+
+  /**
+   * Build Pass 2 prompt with actual file contents.
+   */
+  private buildPass2Prompt(
+    workflow: { goal: string | null; context: string | null; feedback: string | null },
+    repoConfig: RepoConfig,
+    patchPlan: PatchPlan,
+    fileContents: Map<string, string>,
+    storedContextSummary: string | undefined,
+    storedContextPath: string | undefined,
+    approvedArtifacts: { summary: string | null; architecture: string | null; timeline: string | null }
+  ): string {
+    const { owner: repoOwner, repo: repoName } = repoConfig;
+    const promptParts = [
+      `You are an expert software engineer. Implement the planned changes below.`,
+      ``
+    ];
+
+    // Brief goal reminder
+    promptParts.push(
+      `## Goal`,
+      workflow.goal || 'Improve the codebase',
+      ``
+    );
+
+    // Include architecture for reference
+    if (approvedArtifacts.architecture) {
+      promptParts.push(
+        `## Approved Architecture (reference)`,
+        '```',
+        approvedArtifacts.architecture.substring(0, 2000), // Truncate to save tokens
+        '```',
+        ``
+      );
+    }
+
+    // Show the plan from Pass 1
+    promptParts.push(
+      `## Your Plan (from Pass 1)`,
+      `Title: ${patchPlan.title}`,
+      `Summary: ${patchPlan.summary}`,
+      ``,
+      `Files to change:`
+    );
+    for (const file of patchPlan.files) {
+      promptParts.push(`- ${file.path} (${file.action}): ${file.description}`);
+    }
+    promptParts.push(``);
+
+    // Include actual file contents
+    promptParts.push(`## File Contents (current state)`, ``);
+    for (const [path, content] of fileContents) {
+      const ext = path.split('.').pop() || 'txt';
+      promptParts.push(`### ${path}`, '```' + ext, content, '```', ``);
+    }
+
+    promptParts.push(
+      `## Instructions`,
+      `Now implement the changes you planned. For each file:`,
+      ``,
+      `- Use "replace" action for surgical edits (PREFERRED)`,
+      `- Use "create" for new files`,
+      `- Use "modify" only for major refactors (>50% of file, requires rationale)`,
+      `- Use "delete" to remove files`,
+      ``,
+      `Respond with ONLY a JSON object (no markdown code blocks, no explanation):`,
+      SCHEMA_DESCRIPTIONS.patch,
+      ``,
+      `Critical Rules:`,
+      `- Return valid JSON only (no markdown fences, no commentary)`,
+      `- Escape newlines in JSON strings as \\n`,
+      `- For "replace": the "find" string must match EXACTLY ONCE in the file`,
+      `- For "modify": provide rationale and keep under 200 lines`,
+      `- Make minimal, focused changes`,
+      `- Preserve existing code style`
+    );
+
+    return promptParts.join('\n');
+  }
+
+  /**
+   * Parse and retry Pass 1 (PatchPlan) response.
+   */
+  private async parseOrRetryPatchPlan(
+    raw: string,
+    llmRunner: LLMRunner,
+    workflowId: string,
+    repoOwner: string,
+    repoName: string
+  ): Promise<{ parsed: PatchPlan } | { error: string }> {
+    const initial = safeParseLLMResponse(raw, PatchPlanSchema);
+    if (initial.success) {
+      return { parsed: initial.data };
+    }
+
+    this.logger.warn(`Pass 1 parse failed for ${repoOwner}/${repoName}: ${initial.error}`);
+    this.logger.warn(`Retrying Pass 1 with strict JSON request...`);
+
+    const retryPrompt = [
+      'Your previous response was invalid.',
+      '',
+      `Validation error: ${initial.error}`,
+      '',
+      'Return ONLY a valid JSON object with the exact schema below. No markdown, no commentary.',
+      '',
+      SCHEMA_DESCRIPTIONS.patchPlan,
+      '',
+      'Here is your previous output. Fix it into valid JSON:',
+      raw.substring(0, 3000)
+    ].join('\n');
+
+    const retryResponse = await llmRunner.run('coder', retryPrompt, {
+      context: { workflowId }
+    });
+
+    if (!retryResponse.success || !retryResponse.rawContent) {
+      return { error: `Pass 1 retry failed: ${retryResponse.error || 'No response'}. Original error: ${initial.error}` };
+    }
+
+    const retried = safeParseLLMResponse(retryResponse.rawContent, PatchPlanSchema);
+    if (!retried.success) {
+      return { error: `Pass 1 validation failed after retry: ${retried.error}` };
+    }
+
+    return { parsed: retried.data };
   }
 
   private async parseOrRetryLLMResponse(
@@ -845,5 +1064,41 @@ export class IngestContextProcessor extends WorkerHost {
     lines.push('', `- Recommendation: PROCEED`);
 
     return lines.join('\n');
+  }
+
+  /**
+   * Fetch approved artifacts (Summary, Architecture, Timeline) for the workflow.
+   * These guide the patch generation to align with the approved plan.
+   */
+  private async fetchApprovedArtifacts(workflowId: string): Promise<{
+    summary: string | null;
+    architecture: string | null;
+    timeline: string | null;
+  }> {
+    const artifactKinds = ['SummaryV1', 'ArchitectureV1', 'TimelineV1'] as const;
+
+    const artifacts = await this.prisma.artifact.findMany({
+      where: {
+        workflowId,
+        kind: { in: [...artifactKinds] }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    // Get the most recent artifact of each kind
+    const summaryArtifact = artifacts.find(a => a.kind === 'SummaryV1');
+    const architectureArtifact = artifacts.find(a => a.kind === 'ArchitectureV1');
+    const timelineArtifact = artifacts.find(a => a.kind === 'TimelineV1');
+
+    const result = {
+      summary: summaryArtifact?.content || null,
+      architecture: architectureArtifact?.content || null,
+      timeline: timelineArtifact?.content || null
+    };
+
+    const loadedCount = [result.summary, result.architecture, result.timeline].filter(Boolean).length;
+    this.logger.log(`Loaded ${loadedCount}/3 approved artifacts for patch generation`);
+
+    return result;
   }
 }

@@ -57,6 +57,23 @@ export interface ApplyPatchesResult {
   error?: string;
 }
 
+export interface ValidatePatchesInput {
+  patchSetId: string;
+  owner: string;
+  repo: string;
+  ref: string; // Branch or SHA to validate against
+}
+
+export interface ValidatePatchesResult {
+  valid: boolean;
+  errors: Array<{
+    file: string;
+    patch: string;
+    error: string;
+    details?: string[];
+  }>;
+}
+
 export interface FileChange {
   path: string;
   content: string; // new file content (decoded)
@@ -558,6 +575,98 @@ export class PatchApplicator {
         error: errorMsg
       };
     }
+  }
+
+  /**
+   * Validate that all patches in a PatchSet can be cleanly applied.
+   * This is equivalent to `git apply --check` - validates without making changes.
+   * Call this before applyPatches() or applyPatchesToBranch() to catch issues early.
+   */
+  async validatePatches(input: ValidatePatchesInput): Promise<ValidatePatchesResult> {
+    const { patchSetId, owner, repo, ref } = input;
+
+    const patchSet = await this.prisma.patchSet.findUnique({
+      where: { id: patchSetId },
+      include: { patches: { orderBy: { createdAt: 'asc' } } }
+    });
+
+    if (!patchSet) {
+      return {
+        valid: false,
+        errors: [{
+          file: '',
+          patch: patchSetId,
+          error: `PatchSet ${patchSetId} not found`
+        }]
+      };
+    }
+
+    const errors: ValidatePatchesResult['errors'] = [];
+
+    for (const patch of patchSet.patches) {
+      const fileChanges = extractFileChangesFromDiff(patch.diff);
+
+      for (const change of fileChanges) {
+        // New files and deleted files don't need content validation
+        if (change.isNew) {
+          // Just validate the diff is well-formed
+          const content = this.extractNewFileContent(change.diffContent);
+          if (!content && change.diffContent.includes('@@')) {
+            errors.push({
+              file: change.path,
+              patch: patch.title,
+              error: 'Failed to extract content from new file diff'
+            });
+          }
+          continue;
+        }
+
+        if (change.isDeleted) {
+          // Verify file exists
+          try {
+            await this.writeGate.getFileContents(owner, repo, change.path, ref);
+          } catch (err) {
+            errors.push({
+              file: change.path,
+              patch: patch.title,
+              error: `File to be deleted not found at ref ${ref}`
+            });
+          }
+          continue;
+        }
+
+        // For modified files, validate context lines match
+        try {
+          const currentFile = await this.writeGate.getFileContents(owner, repo, change.path, ref);
+
+          // Validate diff can be applied
+          const validation = validateDiffContext(currentFile.content, change.diffContent);
+          if (!validation.valid) {
+            errors.push({
+              file: change.path,
+              patch: patch.title,
+              error: 'Diff context lines do not match current file content',
+              details: validation.errors
+            });
+          }
+        } catch (err) {
+          // File doesn't exist - this might be OK if it's being created
+          // But if the diff expects existing content, it's an error
+          if (!change.diffContent.includes('--- /dev/null')) {
+            errors.push({
+              file: change.path,
+              patch: patch.title,
+              error: `File not found at ref ${ref} (expected existing file for modification)`
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    };
   }
 
   /**
