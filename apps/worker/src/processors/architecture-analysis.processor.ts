@@ -10,6 +10,9 @@ import {
   createProviderWithFallback,
   ArchitectureAnalysisSchema,
   safeParseLLMResponse,
+  sanitizeJson,
+  extractJson,
+  buildRetryPrompt,
   SCHEMA_DESCRIPTIONS,
 } from '@arch-orchestrator/core';
 
@@ -108,7 +111,7 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
       }
 
       const llmProvider = createProviderWithFallback('architecture');
-      let artifact: ArchitectureArtifact;
+      let artifact: ArchitectureArtifact | undefined;
 
       this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for architecture analysis`);
       const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
@@ -144,21 +147,21 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
           `- Integration points with existing code`,
           `- Key technical decisions and their rationale`,
           ``,
-          `Respond with ONLY a JSON object (no markdown code blocks):`,
-          `{`,
-          `  "overview": "2-3 sentence architecture overview",`,
-          `  "components": [{"name": "...", "description": "...", "files": ["..."], "dependencies": ["..."]}],`,
-          `  "dataFlow": "Description of how data flows through the system",`,
-          `  "integrationPoints": ["existing file/module to modify", ...],`,
-          `  "technicalDecisions": [{"decision": "...", "rationale": "...", "alternatives": ["..."]}]`,
-          `}`
+          `Respond with ONLY a JSON object (no markdown code blocks) matching this exact schema:`,
+          SCHEMA_DESCRIPTIONS.architecture,
+          ``,
+          `IMPORTANT:`,
+          `- Keep all string values concise (1-3 sentences max)`,
+          `- Limit to 5-8 components and 3-5 decisions`,
+          `- Do NOT include code snippets in string values`,
+          `- Return valid, complete JSON — do not truncate`
         );
 
         const prompt = promptParts.join('\n');
 
         const response = await llmRunner.run('architect', prompt, {
           context: { workflowId },
-          budget: { maxInputTokens: 50000, maxOutputTokens: 3000, maxTotalCost: 500 }
+          budget: { maxInputTokens: 50000, maxOutputTokens: 5000, maxTotalCost: 500 }
         });
 
         if (response.success && response.rawContent) {
@@ -190,37 +193,95 @@ export class ArchitectureAnalysisProcessor extends WorkerHost {
             };
             this.logger.log(`Architecture analysis complete (Zod validated): ${artifact.components.length} components`);
           } else {
-            // Fallback to legacy parsing
-            this.logger.warn(`Zod validation failed, falling back to legacy parsing: ${zodResult.error}`);
-            try {
-              let jsonContent = response.rawContent.trim();
-              if (jsonContent.startsWith('```')) {
-                jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+            // Retry with structured error feedback before falling back
+            this.logger.warn(`Zod validation failed, retrying with error feedback: ${zodResult.error}`);
+
+            const retryPrompt = buildRetryPrompt(response.rawContent, zodResult, SCHEMA_DESCRIPTIONS.architecture);
+            const retryResponse = await llmRunner.run('architect', retryPrompt, {
+              context: { workflowId },
+              budget: { maxInputTokens: 50000, maxOutputTokens: 5000, maxTotalCost: 500 }
+            });
+
+            if (retryResponse.success && retryResponse.rawContent) {
+              const retryResult = safeParseLLMResponse(retryResponse.rawContent, ArchitectureAnalysisSchema);
+              if (retryResult.success) {
+                const parsed = retryResult.data;
+                artifact = {
+                  kind: 'ArchitectureV1',
+                  overview: parsed.summary,
+                  components: (parsed.components || []).map(c => ({
+                    name: c.name,
+                    description: c.purpose,
+                    files: [],
+                    dependencies: c.dependencies || []
+                  })),
+                  dataFlow: parsed.dataFlow || '',
+                  integrationPoints: [],
+                  technicalDecisions: (parsed.decisions || []).map(d => ({
+                    decision: d.decision,
+                    rationale: d.rationale,
+                    alternatives: (d.alternatives || []).map(a => a.option)
+                  })),
+                  inputs: {
+                    featureGoal: workflow.featureGoal || workflow.goal || '',
+                    feasibilityRecommendation: feasibilityData.recommendation || 'unknown'
+                  }
+                };
+                this.logger.log(`Architecture analysis complete (Zod validated on retry): ${artifact.components.length} components`);
+              } else {
+                this.logger.warn(`Zod validation failed on retry, falling back to legacy parsing: ${retryResult.error}`);
               }
-              const parsed = JSON.parse(jsonContent);
+            }
 
-              artifact = {
-                kind: 'ArchitectureV1',
-                overview: parsed.overview || 'Architecture analysis completed',
-                components: Array.isArray(parsed.components) ? parsed.components : [],
-                dataFlow: parsed.dataFlow || '',
-                integrationPoints: Array.isArray(parsed.integrationPoints) ? parsed.integrationPoints : [],
-                technicalDecisions: Array.isArray(parsed.technicalDecisions) ? parsed.technicalDecisions : [],
-                inputs: {
-                  featureGoal: workflow.featureGoal || workflow.goal || '',
-                  feasibilityRecommendation: feasibilityData.recommendation || 'unknown'
+            // Final fallback to legacy parsing if retry didn't produce a valid artifact
+            if (!artifact) {
+              try {
+                const rawToParse = (retryResponse?.success && retryResponse?.rawContent) ? retryResponse.rawContent : response.rawContent;
+                const jsonContent = extractJson(rawToParse);
+                if (!jsonContent) {
+                  throw new Error('No JSON object found in response');
                 }
-              };
+                const sanitized = sanitizeJson(jsonContent);
+                const parsed = JSON.parse(sanitized);
 
-              this.logger.log(`Architecture analysis complete (legacy): ${artifact.components.length} components`);
-            } catch (parseErr) {
-              this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
-              throw new Error(`Failed to parse architecture analysis: ${parseErr}`);
+                artifact = {
+                  kind: 'ArchitectureV1',
+                  overview: parsed.overview || parsed.summary || 'Architecture analysis completed',
+                  components: Array.isArray(parsed.components) ? parsed.components.map((c: any) => ({
+                    name: c.name || '',
+                    description: c.description || c.purpose || '',
+                    files: Array.isArray(c.files) ? c.files : [],
+                    dependencies: Array.isArray(c.dependencies) ? c.dependencies : []
+                  })) : [],
+                  dataFlow: parsed.dataFlow || '',
+                  integrationPoints: Array.isArray(parsed.integrationPoints) ? parsed.integrationPoints : [],
+                  technicalDecisions: Array.isArray(parsed.technicalDecisions || parsed.decisions) ? (parsed.technicalDecisions || parsed.decisions).map((d: any) => ({
+                    decision: d.decision || '',
+                    rationale: d.rationale || '',
+                    alternatives: Array.isArray(d.alternatives)
+                      ? d.alternatives.map((a: any) => typeof a === 'string' ? a : a.option || String(a))
+                      : []
+                  })) : [],
+                  inputs: {
+                    featureGoal: workflow.featureGoal || workflow.goal || '',
+                    feasibilityRecommendation: feasibilityData.recommendation || 'unknown'
+                  }
+                };
+
+                this.logger.log(`Architecture analysis complete (legacy): ${artifact.components.length} components`);
+              } catch (parseErr) {
+                this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
+                throw new Error(`Failed to parse architecture analysis: ${parseErr}`);
+              }
             }
           }
         } else {
           throw new Error(`LLM call failed: ${response.error}`);
         }
+
+      if (!artifact) {
+        throw new Error('Failed to produce architecture artifact from LLM response');
+      }
 
       const artifactContent = JSON.stringify(artifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');

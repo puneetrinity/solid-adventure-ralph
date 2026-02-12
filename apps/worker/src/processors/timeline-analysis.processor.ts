@@ -10,6 +10,9 @@ import {
   createProviderWithFallback,
   TimelineAnalysisSchema,
   safeParseLLMResponse,
+  sanitizeJson,
+  extractJson,
+  buildRetryPrompt,
   SCHEMA_DESCRIPTIONS,
 } from '@arch-orchestrator/core';
 
@@ -115,7 +118,7 @@ export class TimelineAnalysisProcessor extends WorkerHost {
       }
 
       const llmProvider = createProviderWithFallback('timeline');
-      let artifact: TimelineArtifact;
+      let artifact: TimelineArtifact | undefined;
 
       this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for timeline analysis`);
       const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
@@ -147,34 +150,20 @@ export class TimelineAnalysisProcessor extends WorkerHost {
 
         promptParts.push(
           `## Instructions`,
-          `Create an implementation timeline breaking down the work into phases and tasks. Consider:`,
+          `Create an implementation timeline breaking down the work into tasks and milestones. Consider:`,
           `- Logical ordering of implementation steps`,
           `- Dependencies between tasks`,
           `- Which tasks can be parallelized`,
           `- Complexity of each task`,
           ``,
-          `Respond with ONLY a JSON object (no markdown code blocks):`,
-          `{`,
-          `  "summary": "Brief summary of the implementation plan",`,
-          `  "phases": [`,
-          `    {`,
-          `      "name": "Phase name",`,
-          `      "description": "What this phase accomplishes",`,
-          `      "tasks": [`,
-          `        {`,
-          `          "id": "task-1",`,
-          `          "title": "Task title",`,
-          `          "description": "What needs to be done",`,
-          `          "files": ["files to create/modify"],`,
-          `          "dependencies": ["task ids this depends on"],`,
-          `          "estimatedComplexity": "low" | "medium" | "high"`,
-          `        }`,
-          `      ]`,
-          `    }`,
-          `  ],`,
-          `  "criticalPath": ["task-1", "task-2", ...],`,
-          `  "parallelizable": [["task-a", "task-b"], ...]`,
-          `}`
+          `Respond with ONLY a JSON object (no markdown code blocks) matching this exact schema:`,
+          SCHEMA_DESCRIPTIONS.timeline,
+          ``,
+          `IMPORTANT:`,
+          `- Keep descriptions concise (1-2 sentences)`,
+          `- Group related tasks into milestones`,
+          `- Use task IDs like "T001", "T002" etc.`,
+          `- Return valid, complete JSON — do not truncate`
         );
 
         const prompt = promptParts.join('\n');
@@ -185,37 +174,109 @@ export class TimelineAnalysisProcessor extends WorkerHost {
         });
 
         if (response.success && response.rawContent) {
-          try {
-            let jsonContent = response.rawContent.trim();
-            if (jsonContent.startsWith('```')) {
-              jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
-            }
-            const parsed = JSON.parse(jsonContent);
+          // Try Zod validation first
+          const zodResult = safeParseLLMResponse(response.rawContent, TimelineAnalysisSchema);
 
+          if (zodResult.success) {
+            const parsed = zodResult.data;
+            // Convert flat tasks + milestones into phases for the artifact
+            const phases = this.tasksToPhases(parsed.tasks, parsed.milestones);
             artifact = {
               kind: 'TimelineV1',
-              summary: parsed.summary || 'Timeline analysis completed',
-              phases: Array.isArray(parsed.phases) ? parsed.phases : [],
-              criticalPath: Array.isArray(parsed.criticalPath) ? parsed.criticalPath : [],
-              parallelizable: Array.isArray(parsed.parallelizable) ? parsed.parallelizable : [],
+              summary: parsed.summary,
+              phases,
+              criticalPath: parsed.criticalPath || [],
+              parallelizable: parsed.parallelizable || [],
               inputs: {
                 featureGoal: workflow.featureGoal || workflow.goal || '',
                 architectureOverview: architectureData.overview || ''
               }
             };
+            const totalTasks = parsed.tasks.length;
+            this.logger.log(`Timeline analysis complete (Zod validated): ${artifact.phases.length} phases, ${totalTasks} tasks`);
+          } else {
+            // Retry with structured error feedback
+            this.logger.warn(`Zod validation failed, retrying with error feedback: ${zodResult.error}`);
 
-            const totalTasks = artifact.phases.reduce((sum, p) => sum + (p.tasks?.length || 0), 0);
-            this.logger.log(`Timeline analysis complete: ${artifact.phases.length} phases, ${totalTasks} tasks`);
+            const retryPrompt = buildRetryPrompt(response.rawContent, zodResult, SCHEMA_DESCRIPTIONS.timeline);
+            const retryResponse = await llmRunner.run('architect', retryPrompt, {
+              context: { workflowId },
+              budget: { maxInputTokens: 50000, maxOutputTokens: 4000, maxTotalCost: 500 }
+            });
 
-            // Save tasks to WorkflowTask table
-            await this.saveTasks(workflowId, artifact.phases);
-          } catch (parseErr) {
-            this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
-            throw new Error(`Failed to parse timeline analysis: ${parseErr}`);
+            if (retryResponse.success && retryResponse.rawContent) {
+              const retryResult = safeParseLLMResponse(retryResponse.rawContent, TimelineAnalysisSchema);
+              if (retryResult.success) {
+                const parsed = retryResult.data;
+                const phases = this.tasksToPhases(parsed.tasks, parsed.milestones);
+                artifact = {
+                  kind: 'TimelineV1',
+                  summary: parsed.summary,
+                  phases,
+                  criticalPath: parsed.criticalPath || [],
+                  parallelizable: parsed.parallelizable || [],
+                  inputs: {
+                    featureGoal: workflow.featureGoal || workflow.goal || '',
+                    architectureOverview: architectureData.overview || ''
+                  }
+                };
+                this.logger.log(`Timeline analysis complete (Zod validated on retry): ${artifact.phases.length} phases, ${parsed.tasks.length} tasks`);
+              } else {
+                this.logger.warn(`Zod validation failed on retry, falling back to legacy parsing: ${retryResult.error}`);
+              }
+            }
+
+            // Final fallback to legacy parsing
+            if (!artifact) {
+              try {
+                const rawToParse = (retryResponse?.success && retryResponse?.rawContent) ? retryResponse.rawContent : response.rawContent;
+                const jsonContent = extractJson(rawToParse);
+                if (!jsonContent) {
+                  throw new Error('No JSON object found in response');
+                }
+                const sanitized = sanitizeJson(jsonContent);
+                const parsed = JSON.parse(sanitized);
+
+                // Handle both flat tasks[] and nested phases[].tasks[] formats
+                let phases: TimelineArtifact['phases'];
+                if (Array.isArray(parsed.phases)) {
+                  phases = parsed.phases;
+                } else if (Array.isArray(parsed.tasks)) {
+                  phases = this.tasksToPhases(parsed.tasks, parsed.milestones);
+                } else {
+                  phases = [];
+                }
+
+                artifact = {
+                  kind: 'TimelineV1',
+                  summary: parsed.summary || 'Timeline analysis completed',
+                  phases,
+                  criticalPath: Array.isArray(parsed.criticalPath) ? parsed.criticalPath : [],
+                  parallelizable: Array.isArray(parsed.parallelizable) ? parsed.parallelizable : [],
+                  inputs: {
+                    featureGoal: workflow.featureGoal || workflow.goal || '',
+                    architectureOverview: architectureData.overview || ''
+                  }
+                };
+
+                const totalTasks = artifact.phases.reduce((sum, p) => sum + (p.tasks?.length || 0), 0);
+                this.logger.log(`Timeline analysis complete (legacy): ${artifact.phases.length} phases, ${totalTasks} tasks`);
+              } catch (parseErr) {
+                this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
+                throw new Error(`Failed to parse timeline analysis: ${parseErr}`);
+              }
+            }
           }
+
+          // Save tasks to WorkflowTask table
+          await this.saveTasks(workflowId, artifact!.phases);
         } else {
           throw new Error(`LLM call failed: ${response.error}`);
         }
+
+      if (!artifact) {
+        throw new Error('Failed to produce timeline artifact from LLM response');
+      }
 
       const artifactContent = JSON.stringify(artifact, null, 2);
       const contentSha = createHash('sha256').update(artifactContent, 'utf8').digest('hex');
@@ -299,6 +360,83 @@ export class TimelineAnalysisProcessor extends WorkerHost {
       });
 
       throw error;
+    }
+  }
+
+  /**
+   * Convert flat tasks + milestones (Zod schema format) to nested phases (artifact format).
+   */
+  private tasksToPhases(
+    tasks: Array<{ id: string; title: string; description: string; estimatedHours?: number; dependencies?: string[]; priority?: string; skills?: string[]; risks?: string[] }>,
+    milestones?: Array<{ name: string; tasks: string[]; deliverables?: string[] }>
+  ): TimelineArtifact['phases'] {
+    if (milestones && milestones.length > 0) {
+      // Group tasks by milestone
+      const taskMap = new Map(tasks.map(t => [t.id, t]));
+      const assignedTaskIds = new Set<string>();
+
+      const phases = milestones.map(m => {
+        const phaseTasks = m.tasks
+          .map(id => taskMap.get(id))
+          .filter((t): t is NonNullable<typeof t> => !!t);
+        phaseTasks.forEach(t => assignedTaskIds.add(t.id));
+
+        return {
+          name: m.name,
+          description: (m.deliverables || []).join(', ') || m.name,
+          tasks: phaseTasks.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            files: [] as string[],
+            dependencies: t.dependencies || [],
+            estimatedComplexity: this.priorityToComplexity(t.priority || 'medium') as 'low' | 'medium' | 'high'
+          }))
+        };
+      });
+
+      // Add unassigned tasks as a separate phase
+      const unassigned = tasks.filter(t => !assignedTaskIds.has(t.id));
+      if (unassigned.length > 0) {
+        phases.push({
+          name: 'Additional Tasks',
+          description: 'Tasks not assigned to a specific milestone',
+          tasks: unassigned.map(t => ({
+            id: t.id,
+            title: t.title,
+            description: t.description,
+            files: [] as string[],
+            dependencies: t.dependencies || [],
+            estimatedComplexity: this.priorityToComplexity(t.priority || 'medium') as 'low' | 'medium' | 'high'
+          }))
+        });
+      }
+
+      return phases;
+    }
+
+    // No milestones — put all tasks in a single phase
+    return [{
+      name: 'Implementation',
+      description: 'All implementation tasks',
+      tasks: tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        files: [] as string[],
+        dependencies: t.dependencies || [],
+        estimatedComplexity: this.priorityToComplexity(t.priority || 'medium') as 'low' | 'medium' | 'high'
+      }))
+    }];
+  }
+
+  private priorityToComplexity(priority: string): string {
+    switch (priority) {
+      case 'critical': return 'high';
+      case 'high': return 'high';
+      case 'medium': return 'medium';
+      case 'low': return 'low';
+      default: return 'medium';
     }
   }
 

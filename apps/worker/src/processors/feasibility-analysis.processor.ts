@@ -10,6 +10,9 @@ import {
   createProviderWithFallback,
   FeasibilityAnalysisSchema,
   safeParseLLMResponse,
+  sanitizeJson,
+  extractJson,
+  buildRetryPrompt,
   SCHEMA_DESCRIPTIONS,
 } from '@arch-orchestrator/core';
 
@@ -97,7 +100,7 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
 
       // Generate feasibility analysis using LLM
       const llmProvider = createProviderWithFallback('feasibility');
-      let artifact: FeasibilityArtifact;
+      let artifact: FeasibilityArtifact | undefined;
 
       this.logger.log(`Using ${llmProvider.name} LLM (${llmProvider.modelId}) for feasibility analysis`);
       const llmRunner = new LLMRunner({ provider: llmProvider }, this.prisma);
@@ -133,20 +136,15 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
           `- Information gaps or unknowns`,
           `- Key assumptions`,
           ``,
-          `Respond with ONLY a JSON object (no markdown code blocks):`,
-          `{`,
-          `  "recommendation": "proceed" | "hold" | "reject",`,
-          `  "reasoning": "2-3 sentence explanation of your recommendation",`,
-          `  "risks": ["risk 1", "risk 2", ...],`,
-          `  "alternatives": ["alternative approach 1", ...],`,
-          `  "unknowns": ["what info is missing", ...],`,
-          `  "assumptions": ["assumption 1", ...]`,
-          `}`,
+          `Respond with ONLY a JSON object (no markdown code blocks) matching this exact schema:`,
+          SCHEMA_DESCRIPTIONS.feasibility,
           ``,
           `Guidelines:`,
-          `- "proceed": Feature is well-defined and achievable`,
-          `- "hold": Need more information or clarification before proceeding`,
-          `- "reject": Feature is not feasible, too risky, or doesn't align with goals`
+          `- "proceed": Feature is well-defined and achievable with no concerns`,
+          `- "proceed_with_caution": Feature is achievable but has notable risks`,
+          `- "needs_clarification": Need more information before proceeding`,
+          `- "not_recommended": Feature is not feasible, too risky, or doesn't align with goals`,
+          `- Keep descriptions concise (1-2 sentences each)`
         );
 
         const prompt = promptParts.join('\n');
@@ -179,39 +177,82 @@ export class FeasibilityAnalysisProcessor extends WorkerHost {
             };
             this.logger.log(`Feasibility analysis complete (Zod validated): ${artifact.recommendation}`);
           } else {
-            // Fallback to legacy parsing
-            this.logger.warn(`Zod validation failed, falling back to legacy parsing: ${zodResult.error}`);
-            try {
-              let jsonContent = response.rawContent.trim();
-              if (jsonContent.startsWith('```')) {
-                jsonContent = jsonContent.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+            // Retry with structured error feedback before falling back
+            this.logger.warn(`Zod validation failed, retrying with error feedback: ${zodResult.error}`);
+
+            const retryPrompt = buildRetryPrompt(response.rawContent, zodResult, SCHEMA_DESCRIPTIONS.feasibility);
+            const retryResponse = await llmRunner.run('architect', retryPrompt, {
+              context: { workflowId },
+              budget: { maxInputTokens: 50000, maxOutputTokens: 2000, maxTotalCost: 500 }
+            });
+
+            if (retryResponse.success && retryResponse.rawContent) {
+              const retryResult = safeParseLLMResponse(retryResponse.rawContent, FeasibilityAnalysisSchema);
+              if (retryResult.success) {
+                const parsed = retryResult.data;
+                artifact = {
+                  kind: 'FeasibilityV1',
+                  recommendation: parsed.recommendation === 'proceed' ? 'proceed' :
+                                 parsed.recommendation === 'not_recommended' ? 'reject' : 'hold',
+                  reasoning: parsed.summary,
+                  risks: (parsed.risks || []).map(r => r.description),
+                  alternatives: [],
+                  unknowns: parsed.prerequisites || [],
+                  assumptions: [],
+                  repoSummaries,
+                  inputs: {
+                    featureGoal: workflow.featureGoal || workflow.goal || '',
+                    businessJustification: workflow.businessJustification || ''
+                  }
+                };
+                this.logger.log(`Feasibility analysis complete (Zod validated on retry): ${artifact.recommendation}`);
+              } else {
+                this.logger.warn(`Zod validation failed on retry, falling back to legacy parsing: ${retryResult.error}`);
               }
-              const parsed = JSON.parse(jsonContent);
+            }
 
-              artifact = {
-                kind: 'FeasibilityV1',
-                recommendation: parsed.recommendation || 'hold',
-                reasoning: parsed.reasoning || 'Analysis completed',
-                risks: Array.isArray(parsed.risks) ? parsed.risks : [],
-                alternatives: Array.isArray(parsed.alternatives) ? parsed.alternatives : [],
-                unknowns: Array.isArray(parsed.unknowns) ? parsed.unknowns : [],
-                assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
-                repoSummaries,
-                inputs: {
-                  featureGoal: workflow.featureGoal || workflow.goal || '',
-                  businessJustification: workflow.businessJustification || ''
+            // Final fallback to legacy parsing if retry didn't produce a valid artifact
+            if (!artifact) {
+              try {
+                const rawToParse = (retryResponse?.success && retryResponse?.rawContent) ? retryResponse.rawContent : response.rawContent;
+                const jsonContent = extractJson(rawToParse);
+                if (!jsonContent) {
+                  throw new Error('No JSON object found in response');
                 }
-              };
+                const sanitized = sanitizeJson(jsonContent);
+                const parsed = JSON.parse(sanitized);
 
-              this.logger.log(`Feasibility analysis complete (legacy): ${artifact.recommendation}`);
-            } catch (parseErr) {
-              this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
-              throw new Error(`Failed to parse feasibility analysis: ${parseErr}`);
+                artifact = {
+                  kind: 'FeasibilityV1',
+                  recommendation: parsed.recommendation || 'hold',
+                  reasoning: parsed.reasoning || parsed.summary || 'Analysis completed',
+                  risks: Array.isArray(parsed.risks)
+                    ? parsed.risks.map((r: any) => typeof r === 'string' ? r : r.description || String(r))
+                    : [],
+                  alternatives: Array.isArray(parsed.alternatives) ? parsed.alternatives : [],
+                  unknowns: Array.isArray(parsed.unknowns) ? parsed.unknowns : Array.isArray(parsed.prerequisites) ? parsed.prerequisites : [],
+                  assumptions: Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
+                  repoSummaries,
+                  inputs: {
+                    featureGoal: workflow.featureGoal || workflow.goal || '',
+                    businessJustification: workflow.businessJustification || ''
+                  }
+                };
+
+                this.logger.log(`Feasibility analysis complete (legacy): ${artifact.recommendation}`);
+              } catch (parseErr) {
+                this.logger.warn(`Failed to parse LLM response: ${parseErr}`);
+                throw new Error(`Failed to parse feasibility analysis: ${parseErr}`);
+              }
             }
           }
         } else {
           throw new Error(`LLM call failed: ${response.error}`);
         }
+
+      if (!artifact) {
+        throw new Error('Failed to produce feasibility artifact from LLM response');
+      }
 
       // Save artifact
       const artifactContent = JSON.stringify(artifact, null, 2);
