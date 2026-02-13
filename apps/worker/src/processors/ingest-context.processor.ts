@@ -447,6 +447,28 @@ export class IngestContextProcessor extends WorkerHost {
         patchTitle = patchPlan.title || patchTitle;
         patchSummary = patchPlan.summary || patchSummary;
         this.logger.log(`Pass 1 complete: ${patchPlan.files.length} files selected for ${repoOwner}/${repoName}`);
+
+        // Store PatchPlan artifact for UI visibility
+        try {
+          const planContent = JSON.stringify({
+            repoOwner,
+            repoName,
+            baseBranch: repoConfig.baseBranch,
+            plan: patchPlan
+          }, null, 2);
+          const contentSha = createHash('sha256').update(planContent, 'utf8').digest('hex');
+          await this.prisma.artifact.create({
+            data: {
+              workflowId,
+              kind: 'PatchPlanV1',
+              path: `.ai/patch-plan/${repoOwner}_${repoName}.json`,
+              content: planContent,
+              contentSha
+            }
+          });
+        } catch (err) {
+          this.logger.warn(`Failed to store PatchPlanV1 artifact for ${repoOwner}/${repoName}: ${err}`);
+        }
       }
     } else {
       this.logger.warn(`Pass 1 LLM call failed for ${repoOwner}/${repoName}: ${pass1Response.error}`);

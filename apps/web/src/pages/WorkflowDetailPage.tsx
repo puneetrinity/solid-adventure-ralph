@@ -890,6 +890,7 @@ export function WorkflowDetailPage() {
           <PatchSetsTab
             workflowId={workflow.id}
             patchSets={workflow.patchSets || []}
+            artifacts={workflow.artifacts || []}
             canApprove={workflow.state === 'WAITING_USER_APPROVAL'}
             onRefetch={refetch}
           />
@@ -1866,11 +1867,13 @@ function PolicyTab({ violations }: { violations: PolicyViolation[] }) {
 function PatchSetsTab({
   workflowId,
   patchSets,
+  artifacts,
   canApprove,
   onRefetch
 }: {
   workflowId: string;
   patchSets: PatchSet[];
+  artifacts: Artifact[];
   canApprove: boolean;
   onRefetch: () => Promise<void>;
 }) {
@@ -1880,6 +1883,20 @@ function PatchSetsTab({
   const [showChangesModal, setShowChangesModal] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [changesComment, setChangesComment] = useState('');
+
+  const patchPlans = (artifacts || []).filter(a => a.kind === 'PatchPlanV1');
+  const patchPlansByRepo = patchPlans.reduce((acc, artifact) => {
+    try {
+      const data = JSON.parse(artifact.content);
+      const repoKey = data?.repoOwner && data?.repoName
+        ? `${data.repoOwner}/${data.repoName}`
+        : 'unknown';
+      acc[repoKey] = { ...data, createdAt: artifact.createdAt };
+    } catch {
+      // ignore malformed artifact
+    }
+    return acc;
+  }, {} as Record<string, any>);
 
   const handleApprove = async (patchSetId: string) => {
     setActionInProgress(patchSetId);
@@ -2009,6 +2026,52 @@ function PatchSetsTab({
       </Modal>
 
       <div className="space-y-6">
+        {/* Patch Plan (Pass 1) */}
+        {patchPlans.length > 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <FileText className="h-4 w-4 text-blue-500" />
+              <h3 className="text-sm font-medium text-gray-900">Patch Plan (File Selection)</h3>
+            </div>
+            <div className="space-y-4">
+              {Object.entries(patchPlansByRepo).map(([repoKey, planData]) => (
+                <div key={repoKey} className="rounded-md border border-gray-100 p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <GitBranch className="h-4 w-4 text-blue-500" />
+                    <span className="font-mono text-xs text-blue-700">{repoKey}</span>
+                  </div>
+                  {planData?.plan?.title && (
+                    <div className="text-sm font-medium text-gray-900">{planData.plan.title}</div>
+                  )}
+                  {planData?.plan?.summary && (
+                    <div className="text-xs text-gray-600 mt-1">{planData.plan.summary}</div>
+                  )}
+                  {planData?.plan?.files?.length > 0 && (
+                    <ul className="mt-3 space-y-2">
+                      {planData.plan.files.map((file: any, idx: number) => (
+                        <li key={`${file.path}-${idx}`} className="text-xs text-gray-700">
+                          <span className="font-mono">{file.path}</span>
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                            {file.action}
+                          </span>
+                          {file.description && (
+                            <span className="ml-2 text-gray-500">— {file.description}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {planData?.createdAt && (
+                    <div className="mt-2 text-[10px] text-gray-400">
+                      Generated: {new Date(planData.createdAt).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {repoKeys.map(repoKey => {
           const repoPatchSets = patchSetsByRepo[repoKey];
           return (
